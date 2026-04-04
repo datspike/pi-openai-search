@@ -32,6 +32,7 @@ async function writeDebugSnapshot(path, model, payload) {
     model,
     toolChoice: payload?.tool_choice,
     parallelToolCalls: payload?.parallel_tool_calls,
+    include: Array.isArray(payload?.include) ? payload.include : undefined,
     toolCount: Array.isArray(payload?.tools) ? payload.tools.length : 0,
     tools: Array.isArray(payload?.tools)
       ? payload.tools.map((tool) => {

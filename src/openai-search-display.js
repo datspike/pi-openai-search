@@ -76,6 +76,31 @@ export function extractActionSources(action) {
 }
 
 /**
+ * Извлечение источников из web_search_call.results.
+ *
+ * @param {any} results Structured results web_search_call.
+ * @returns {Array<{title: string, url: string}>} Источники.
+ */
+export function extractResultSources(results) {
+  const rawResults = Array.isArray(results) ? results : [];
+  return dedupeSources(rawResults.map(normalizeSource).filter(Boolean));
+}
+
+/**
+ * Извлечение всех structured источников одного web_search_call.
+ *
+ * @param {any} action Action web_search_call.
+ * @param {any} results Structured results web_search_call.
+ * @returns {Array<{title: string, url: string}>} Объединённые structured источники.
+ */
+export function extractStructuredSearchCallSources(action, results) {
+  return dedupeSources([
+    ...extractActionSources(action),
+    ...extractResultSources(results),
+  ]);
+}
+
+/**
  * Извлечение источников из annotations message item.
  *
  * @param {any} item Message item Responses API.
@@ -212,14 +237,14 @@ export function summarizeSearchInput(action) {
  * Inline-text fallback здесь намеренно запрещён: канонический `webSearchResult`
  * должен строиться только из factual structured inputs.
  *
- * @param {Array<{title: string, url: string}> | undefined} actionSources Источники из action.sources.
+ * @param {Array<{title: string, url: string}> | undefined} callSources Источники из structured web_search_call seams.
  * @param {Array<{title: string, url: string}> | undefined} annotationSources Источники из annotations.
  * @param {Array<{title: string, url: string}> | undefined} fallbackSources Legacy-аргумент; synthetic fallback игнорируется.
  * @returns {Array<{title: string, url: string}>} Источники для webSearchResult.
  */
-export function resolveWebSearchResultSources(actionSources, annotationSources, fallbackSources) {
+export function resolveWebSearchResultSources(callSources, annotationSources, fallbackSources) {
   void fallbackSources;
-  return dedupeSources([...(actionSources || []), ...(annotationSources || [])]);
+  return dedupeSources([...(callSources || []), ...(annotationSources || [])]);
 }
 
 /**

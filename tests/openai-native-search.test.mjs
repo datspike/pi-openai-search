@@ -16,6 +16,8 @@ import {
   appendStructuredCitations,
   buildWebSearchResultContent,
   extractInlineSourcesFromText,
+  extractResultSources,
+  extractStructuredSearchCallSources,
   formatTruthfulWebSearchDoneLabel,
   formatTruthfulWebSearchPendingLabel,
   getFactualSearchLifecycleUpdate,
@@ -176,7 +178,10 @@ test("injectNativeWebSearch injects tool and removes custom search tools", () =>
 
   assert.equal(result.tool_choice, "auto");
   assert.equal(result.parallel_tool_calls, true);
-  assert.deepEqual(result.include, ["web_search_call.action.sources"]);
+  assert.deepEqual(result.include, [
+    "web_search_call.action.sources",
+    "web_search_call.results",
+  ]);
   assert.deepEqual(result.tools, [
     { type: "function", name: "read" },
     {
@@ -190,9 +195,13 @@ test("injectNativeWebSearch injects tool and removes custom search tools", () =>
   ]);
 });
 
-test("ensureNativeSearchIncludes preserves existing include fields", () => {
+test("ensureNativeSearchIncludes preserves existing include fields and dedupes duplicates", () => {
   const payload = {
-    include: ["reasoning.encrypted_content"],
+    include: [
+      "reasoning.encrypted_content",
+      "web_search_call.action.sources",
+      "reasoning.encrypted_content",
+    ],
   };
 
   ensureNativeSearchIncludes(payload);
@@ -200,6 +209,7 @@ test("ensureNativeSearchIncludes preserves existing include fields", () => {
   assert.deepEqual(payload.include, [
     "reasoning.encrypted_content",
     "web_search_call.action.sources",
+    "web_search_call.results",
   ]);
 });
 
@@ -259,7 +269,45 @@ test("appendStructuredCitations appends only missing URLs", () => {
   assert.equal(preserved, next);
 });
 
-test("resolveWebSearchResultSources merges structured action and annotation sources only", () => {
+test("extractResultSources normalizes results-only payload and drops malformed entries", () => {
+  const result = extractResultSources([
+    { title: "Result source", url: "https://example.com/result" },
+    { source: { title: "Nested result", url: "https://example.com/nested" } },
+    { url_citation: { title: "Citation result", url: "https://example.com/citation" } },
+    { title: "Missing URL" },
+    { source: { title: "Missing nested URL" } },
+    { title: "Duplicate result", url: "https://example.com/result" },
+    null,
+  ]);
+
+  assert.deepEqual(result, [
+    { title: "Result source", url: "https://example.com/result" },
+    { title: "Nested result", url: "https://example.com/nested" },
+    { title: "Citation result", url: "https://example.com/citation" },
+  ]);
+});
+
+test("extractStructuredSearchCallSources merges action.sources and results without cross-contamination", () => {
+  const result = extractStructuredSearchCallSources(
+    {
+      sources: [
+        { title: "Action source", url: "https://example.com/action" },
+        { title: "Duplicate from action", url: "https://example.com/result" },
+      ],
+    },
+    [
+      { title: "Result source", url: "https://example.com/result" },
+      { title: "Malformed result" },
+    ],
+  );
+
+  assert.deepEqual(result, [
+    { title: "Action source", url: "https://example.com/action" },
+    { title: "Duplicate from action", url: "https://example.com/result" },
+  ]);
+});
+
+test("resolveWebSearchResultSources merges structured call and annotation sources only", () => {
   const result = resolveWebSearchResultSources(
     [{ title: "Action source", url: "https://example.com/action" }],
     [
@@ -901,6 +949,36 @@ test("debug snapshot write failures do not escape extension handlers", async () 
   }
 });
 
+test("isCompactNoSessionOutput treats piped stdout as compact proof mode", async () => {
+  const tempDir = fs.mkdtempSync(path.join(process.cwd(), ".tmp-pi-openai-search-compact-mode-test-"));
+  const originalIsTTYDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+
+  try {
+    const patchModule = await loadTestableDisplayPatchModule(tempDir);
+
+    Object.defineProperty(process.stdout, "isTTY", {
+      configurable: true,
+      enumerable: true,
+      writable: true,
+      value: undefined,
+    });
+    assert.equal(patchModule.isCompactNoSessionOutput(), true);
+
+    process.stdout.isTTY = false;
+    assert.equal(patchModule.isCompactNoSessionOutput(), true);
+
+    process.stdout.isTTY = true;
+    assert.equal(patchModule.isCompactNoSessionOutput(), false);
+  } finally {
+    if (originalIsTTYDescriptor) {
+      Object.defineProperty(process.stdout, "isTTY", originalIsTTYDescriptor);
+    } else {
+      delete process.stdout.isTTY;
+    }
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("enrichOutputFromCompletedResponse keeps per-call truthfulness and backfills terminal search only", async () => {
   const tempDir = fs.mkdtempSync(path.join(process.cwd(), ".tmp-pi-openai-search-enrich-test-"));
 
@@ -938,8 +1016,11 @@ test("enrichOutputFromCompletedResponse keeps per-call truthfulness and backfill
             action: {
               type: "search",
               query: "openai news april",
-              sources: [{ title: "First source", url: "https://example.com/first" }],
             },
+            results: [
+              { title: "First result source", url: "https://example.com/first" },
+              { title: "Malformed result without url" },
+            ],
           },
           {
             type: "web_search_call",
@@ -968,6 +1049,11 @@ test("enrichOutputFromCompletedResponse keeps per-call truthfulness and backfill
                 { title: "First source duplicate", url: "https://example.com/first" },
               ],
             },
+            results: [
+              { title: "Third result source", url: "https://example.com/third" },
+              { title: "Second source duplicate", url: "https://example.com/second" },
+              { source: { title: "Malformed nested result" } },
+            ],
           },
           {
             type: "message",
@@ -1010,7 +1096,7 @@ test("enrichOutputFromCompletedResponse keeps per-call truthfulness and backfill
     assert.deepEqual(resultByToolUseId.get("search_1"), [
       {
         type: "web_search_result",
-        title: "First source",
+        title: "First result source",
         url: "https://example.com/first",
       },
     ]);
@@ -1023,13 +1109,18 @@ test("enrichOutputFromCompletedResponse keeps per-call truthfulness and backfill
     assert.deepEqual(resultByToolUseId.get("search_2"), [
       {
         type: "web_search_result",
-        title: "First source",
+        title: "First result source",
         url: "https://example.com/first",
       },
       {
         type: "web_search_result",
         title: "Second source",
         url: "https://example.com/second",
+      },
+      {
+        type: "web_search_result",
+        title: "Third result source",
+        url: "https://example.com/third",
       },
       {
         type: "web_search_result",
@@ -1045,6 +1136,10 @@ test("enrichOutputFromCompletedResponse keeps per-call truthfulness and backfill
     assert.ok(
       output.content[0].text.includes("https://example.com/annotated"),
       "structured annotation sources should still be appended to text citations",
+    );
+    assert.equal(
+      resultByToolUseId.get("search_1").some((item) => item.url === "https://inline.example.com/ghost"),
+      false,
     );
     assert.equal(
       resultByToolUseId.get("search_2").some((item) => item.url === "https://inline.example.com/ghost"),

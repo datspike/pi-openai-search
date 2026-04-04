@@ -156,6 +156,58 @@ cd ~/hobby/pi-openai-search
 npm test
 ```
 
+## Regression proof (S02)
+
+### Scenario A — live search JSONL proof
+
+Для локального repo запуска:
+
+```bash
+PI_OPENAI_NATIVE_SEARCH=1 \
+PI_OPENAI_NATIVE_SEARCH_MODE=live \
+gsd --extension . --mode json --print --no-session --model openai/gpt-5.4 \
+  'Search the web for the latest OpenAI news today. Return exactly two bullet points with two distinct source links.'
+```
+
+Для auto-mode worktree используй абсолютный путь к текущему checkout, иначе `--extension .` может резолвиться к каноническому repo cwd:
+
+```bash
+PI_OPENAI_NATIVE_SEARCH=1 \
+PI_OPENAI_NATIVE_SEARCH_MODE=live \
+gsd --extension /absolute/path/to/worktree/index.js --mode json --print --no-session --model openai/gpt-5.4 \
+  'Search the web for the latest OpenAI news today. Return exactly two bullet points with two distinct source links.'
+```
+
+#### Pass criteria
+
+- stdout JSONL проходит через verifier harness `spawnSync('sh', ['-lc', cmd], { maxBuffer: 1024 * 1024 })` без `ENOBUFS`
+- в `message_end.message.content` есть factual `serverToolUse` / `webSearchResult` blocks
+- если upstream вернул structured `action.sources` или annotations, terminal `search` block содержит deduped source set только из этих structured данных
+
+#### Current upstream failure signature
+
+На состоянии апреля 2026 local mapper больше не переполняет 1 MiB buffer, но live OpenAI Responses нередко возвращает `web_search_call` без structured `action.sources/results`, а `output_text.annotations` остаётся пустым. В этом режиме terminal `webSearchResult` честно деградирует к sentinel `web_search_tool_result_complete`. Это provider-contract blocker, а не возврат к synthetic fallback.
+
+### Scenario B — live non-search negative proof
+
+```bash
+PI_OPENAI_NATIVE_SEARCH=1 \
+PI_OPENAI_NATIVE_SEARCH_MODE=live \
+gsd --extension . --mode json --print --no-session --model openai/gpt-5.4 \
+  'Reply with exactly two words: calm acknowledgement.'
+```
+
+#### Pass criteria
+
+- финальный assistant message содержит только `text` block
+- нет `serverToolUse` и `webSearchResult`
+- нет мусорных URL вроде `https://www`
+
+### Useful diagnostics
+
+- `PI_OPENAI_NATIVE_SEARCH_DEBUG_FILE=/tmp/pi-openai-search.json` — снимок финального provider payload (`tools`, `include`, `tool_choice`, `parallel_tool_calls`)
+- `PI_OPENAI_NATIVE_SEARCH_DEBUG_MESSAGE_FILE=/tmp/pi-openai-search-message.json` — снимок финального assistant message, если runtime действительно эмитит `message_end`
+
 ## Файлы
 
 - `index.js` - регистрация hook-ов extension

@@ -12,9 +12,8 @@ import {
   appendStructuredCitations,
   buildWebSearchResultContent,
   dedupeSources,
-  extractActionSources,
   extractAnnotationSources,
-  extractInlineSourcesFromText,
+  extractStructuredSearchCallSources,
   resolveWebSearchResultSources,
   summarizeSearchInput,
 } from "./openai-search-display.js";
@@ -169,13 +168,16 @@ function buildPatchedParams(model, context, options, internals) {
     params.tools = internals.convertResponsesTools(context.tools);
   }
 
+  const requestedReasoningEffort = options?.reasoningEffort;
+  const requestedReasoningSummary = options?.reasoningSummary;
+
   if (model.reasoning) {
     params.include = ["reasoning.encrypted_content"];
-    if (options?.reasoningEffort || options?.reasoningSummary) {
-      const effort = internals.clampReasoningForModel(model.name, options?.reasoningEffort || "medium");
+    if (requestedReasoningEffort || requestedReasoningSummary) {
+      const effort = internals.clampReasoningForModel(model.name, requestedReasoningEffort || "medium");
       params.reasoning = {
         effort: effort || "medium",
-        summary: options?.reasoningSummary || "auto",
+        summary: requestedReasoningSummary || "auto",
       };
     } else if (model.name.startsWith("gpt-5")) {
       messages.push({
@@ -246,6 +248,136 @@ function encodeTextSignatureV1(id, phase) {
 }
 
 /**
+ * Компактное представление reasoning item для последующих turn-ов.
+ *
+ * OpenAI Responses требует вернуть parseable reasoning item, но для session history
+ * здесь достаточно identity + encrypted content. Полный summary раздувает каждый
+ * JSONL `message_update`, потому что `partial` повторяет весь накопленный output.
+ *
+ * @param {any} item OpenAI reasoning item.
+ * @returns {string | undefined} Компактная JSON-signature или undefined.
+ */
+function encodeReasoningSignature(item) {
+  if (!item || typeof item !== "object") {
+    return undefined;
+  }
+
+  /** @type {{type: "reasoning", id?: string, encrypted_content?: string, status?: string}} */
+  const payload = {
+    type: "reasoning",
+  };
+
+  if (typeof item.id === "string" && item.id.length > 0) {
+    payload.id = item.id;
+  }
+  if (typeof item.encrypted_content === "string" && item.encrypted_content.length > 0) {
+    payload.encrypted_content = item.encrypted_content;
+  }
+  if (typeof item.status === "string" && item.status.length > 0) {
+    payload.status = item.status;
+  }
+
+  if (!payload.id && !payload.encrypted_content) {
+    return undefined;
+  }
+
+  return JSON.stringify(payload);
+}
+
+/**
+ * Определение компактного no-session stdout режима.
+ *
+ * @param {{sessionId?: string} | undefined} options Stream options.
+ * @returns {boolean} true, если это no-session print/piped run без TTY.
+ */
+export function isCompactNoSessionOutput(options) {
+  void options;
+  return process.stdout?.isTTY !== true;
+}
+
+/**
+ * Компактный partial для streaming assistant events в JSON proof path.
+ *
+ * Полный growing `partial` нужен интерактивному runtime, но в no-session print/piped
+ * режиме downstream proof читает terminal `message_end`, а не восстанавливает UI из
+ * всех delta-событий. Поэтому для этого режима достаточно текущего блока.
+ *
+ * @param {any} output Текущий partial assistant message.
+ * @param {number} contentIndex Индекс обновляемого блока в полном output.
+ * @param {boolean} compactMode Нужно ли сжимать partial.
+ * @param {string | undefined} eventType Тип assistant event.
+ * @returns {{contentIndex: number, partial: any}} Нормализованный event context.
+ */
+function buildAssistantEventContext(output, contentIndex, compactMode = false, eventType = undefined) {
+  if (!compactMode || !output || typeof output !== "object" || !Array.isArray(output.content)) {
+    return {
+      contentIndex,
+      partial: output,
+    };
+  }
+
+  const shouldKeepBlock = eventType === "server_tool_use" || eventType === "web_search_result";
+  const content = shouldKeepBlock ? compactAssistantEventBlock(output.content[contentIndex], eventType) : undefined;
+  return {
+    contentIndex: content ? 0 : contentIndex,
+    partial: {
+      role: output.role,
+      api: output.api,
+      provider: output.provider,
+      model: output.model,
+      stopReason: output.stopReason,
+      timestamp: output.timestamp,
+      content: content ? [content] : [],
+    },
+  };
+}
+
+/**
+ * Сжатие factual block для compact stdout path.
+ *
+ * @param {any} block Текущий assistant content block.
+ * @param {string | undefined} eventType Тип assistant event.
+ * @returns {any} Компактный block.
+ */
+function compactAssistantEventBlock(block, eventType) {
+  if (!block || typeof block !== "object") {
+    return undefined;
+  }
+
+  if (eventType === "server_tool_use" && block.type === "serverToolUse") {
+    const input = block.input && typeof block.input === "object"
+      ? {
+          type: block.input.type,
+          query: block.input.query,
+          url: block.input.url,
+          status: block.input.status,
+        }
+      : block.input;
+    return {
+      type: block.type,
+      id: block.id,
+      name: block.name,
+      input,
+    };
+  }
+
+  if (eventType === "web_search_result" && block.type === "webSearchResult") {
+    const content = Array.isArray(block.content)
+      ? block.content.map((item) => (item && typeof item === "object" && item.type ? { type: item.type } : {}))
+      : block.content && typeof block.content === "object" && block.content.type
+        ? { type: block.content.type }
+        : block.content;
+    return {
+      type: block.type,
+      toolUseId: block.toolUseId,
+      content,
+    };
+  }
+
+  return block;
+}
+
+/**
  * Карта stop reason из статуса Responses API.
  *
  * @param {string | undefined} status Статус ответа.
@@ -299,8 +431,12 @@ function findTerminalSearchCallId(responseOutput) {
  * @param {any} stream Stream assistant events.
  * @returns {void}
  */
-export function enrichOutputFromCompletedResponse(output, response, state, stream) {
+export function enrichOutputFromCompletedResponse(output, response, state, stream, compactMode = false) {
   const responseOutput = Array.isArray(response?.output) ? response.output : [];
+  const searchCalls = responseOutput.filter((item) => item?.type === "web_search_call");
+  const searchCallSourcesById = new Map(
+    searchCalls.map((item) => [item.id, extractStructuredSearchCallSources(item.action, item.results)]),
+  );
   const terminalSearchCallId = findTerminalSearchCallId(responseOutput);
   const annotationSources = dedupeSources(
     responseOutput
@@ -308,9 +444,7 @@ export function enrichOutputFromCompletedResponse(output, response, state, strea
       .flatMap((item) => extractAnnotationSources(item)),
   );
   const allSources = dedupeSources(
-    responseOutput
-      .filter((item) => item?.type === "web_search_call")
-      .flatMap((item) => extractActionSources(item.action)),
+    searchCalls.flatMap((item) => searchCallSourcesById.get(item.id) || []),
   );
 
   for (const item of responseOutput) {
@@ -327,8 +461,7 @@ export function enrichOutputFromCompletedResponse(output, response, state, strea
         state.searchToolBlockById.set(item.id, output.content.length - 1);
         stream.push({
           type: "server_tool_use",
-          contentIndex: output.content.length - 1,
-          partial: output,
+          ...buildAssistantEventContext(output, output.content.length - 1, compactMode, "server_tool_use"),
         });
       } else {
         const existingToolBlock = output.content[toolBlockIndex];
@@ -337,7 +470,7 @@ export function enrichOutputFromCompletedResponse(output, response, state, strea
         }
       }
 
-      const perCallSources = extractActionSources(item.action);
+      const perCallSources = searchCallSourcesById.get(item.id) || [];
       const resultSources = item.id === terminalSearchCallId
         ? resolveWebSearchResultSources(allSources, annotationSources)
         : resolveWebSearchResultSources(perCallSources, []);
@@ -352,8 +485,7 @@ export function enrichOutputFromCompletedResponse(output, response, state, strea
         state.searchResultBlockById.set(item.id, output.content.length - 1);
         stream.push({
           type: "web_search_result",
-          contentIndex: output.content.length - 1,
-          partial: output,
+          ...buildAssistantEventContext(output, output.content.length - 1, compactMode, "web_search_result"),
         });
       } else {
         const existingResultBlock = output.content[resultBlockIndex];
@@ -399,6 +531,9 @@ async function processResponsesStreamWithSearchDisplay(openaiStream, output, str
   let currentBlock = null;
   const blocks = output.content;
   const blockIndex = () => blocks.length - 1;
+  const compactStreamEvents = isCompactNoSessionOutput(options);
+  const eventContext = (eventType, contentIndex) => buildAssistantEventContext(output, contentIndex, compactStreamEvents, eventType);
+  const currentEventContext = (eventType) => eventContext(eventType, blockIndex());
   const state = {
     messageBlockByItemId: new Map(),
     searchCallIds: new Set(),
@@ -413,13 +548,13 @@ async function processResponsesStreamWithSearchDisplay(openaiStream, output, str
         currentItem = item;
         currentBlock = { type: "thinking", thinking: "" };
         output.content.push(currentBlock);
-        stream.push({ type: "thinking_start", contentIndex: blockIndex(), partial: output });
+        stream.push({ type: "thinking_start", ...currentEventContext("thinking_start") });
       } else if (item.type === "message") {
         currentItem = item;
         currentBlock = { type: "text", text: "" };
         output.content.push(currentBlock);
         state.messageBlockByItemId.set(item.id, blockIndex());
-        stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
+        stream.push({ type: "text_start", ...currentEventContext("text_start") });
       } else if (item.type === "function_call") {
         currentItem = item;
         currentBlock = {
@@ -430,7 +565,7 @@ async function processResponsesStreamWithSearchDisplay(openaiStream, output, str
           partialJson: item.arguments || "",
         };
         output.content.push(currentBlock);
-        stream.push({ type: "toolcall_start", contentIndex: blockIndex(), partial: output });
+        stream.push({ type: "toolcall_start", ...currentEventContext("toolcall_start") });
       } else if (item.type === "web_search_call") {
         output.content.push({
           type: "serverToolUse",
@@ -440,7 +575,7 @@ async function processResponsesStreamWithSearchDisplay(openaiStream, output, str
         });
         state.searchCallIds.add(item.id);
         state.searchToolBlockById.set(item.id, blockIndex());
-        stream.push({ type: "server_tool_use", contentIndex: blockIndex(), partial: output });
+        stream.push({ type: "server_tool_use", ...currentEventContext("server_tool_use") });
       }
     } else if (event.type === "response.reasoning_summary_part.added") {
       if (currentItem && currentItem.type === "reasoning") {
@@ -456,9 +591,8 @@ async function processResponsesStreamWithSearchDisplay(openaiStream, output, str
           lastPart.text += event.delta;
           stream.push({
             type: "thinking_delta",
-            contentIndex: blockIndex(),
+            ...currentEventContext("thinking_delta"),
             delta: event.delta,
-            partial: output,
           });
         }
       }
@@ -471,9 +605,8 @@ async function processResponsesStreamWithSearchDisplay(openaiStream, output, str
           lastPart.text += "\n\n";
           stream.push({
             type: "thinking_delta",
-            contentIndex: blockIndex(),
+            ...currentEventContext("thinking_delta"),
             delta: "\n\n",
-            partial: output,
           });
         }
       }
@@ -495,9 +628,8 @@ async function processResponsesStreamWithSearchDisplay(openaiStream, output, str
           lastPart.text += event.delta;
           stream.push({
             type: "text_delta",
-            contentIndex: blockIndex(),
+            ...currentEventContext("text_delta"),
             delta: event.delta,
-            partial: output,
           });
         }
       }
@@ -512,9 +644,8 @@ async function processResponsesStreamWithSearchDisplay(openaiStream, output, str
           lastPart.refusal += event.delta;
           stream.push({
             type: "text_delta",
-            contentIndex: blockIndex(),
+            ...currentEventContext("text_delta"),
             delta: event.delta,
-            partial: output,
           });
         }
       }
@@ -528,9 +659,8 @@ async function processResponsesStreamWithSearchDisplay(openaiStream, output, str
         }
         stream.push({
           type: "toolcall_delta",
-          contentIndex: blockIndex(),
+          ...currentEventContext("toolcall_delta"),
           delta: event.delta,
-          partial: output,
         });
       }
     } else if (event.type === "response.function_call_arguments.done") {
@@ -546,12 +676,11 @@ async function processResponsesStreamWithSearchDisplay(openaiStream, output, str
       const item = event.item;
       if (item.type === "reasoning" && currentBlock?.type === "thinking") {
         currentBlock.thinking = item.summary?.map((summary) => summary.text).join("\n\n") || "";
-        currentBlock.thinkingSignature = JSON.stringify(item);
+        currentBlock.thinkingSignature = compactStreamEvents ? undefined : encodeReasoningSignature(item);
         stream.push({
           type: "thinking_end",
-          contentIndex: blockIndex(),
+          ...currentEventContext("thinking_end"),
           content: currentBlock.thinking,
-          partial: output,
         });
         currentBlock = null;
       } else if (item.type === "message" && currentBlock?.type === "text") {
@@ -559,9 +688,8 @@ async function processResponsesStreamWithSearchDisplay(openaiStream, output, str
         currentBlock.textSignature = encodeTextSignatureV1(item.id, item.phase ?? undefined);
         stream.push({
           type: "text_end",
-          contentIndex: blockIndex(),
+          ...currentEventContext("text_end"),
           content: currentBlock.text,
-          partial: output,
         });
         currentBlock = null;
       } else if (item.type === "function_call") {
@@ -586,22 +714,24 @@ async function processResponsesStreamWithSearchDisplay(openaiStream, output, str
           arguments: args,
         };
         currentBlock = null;
-        stream.push({ type: "toolcall_end", contentIndex: blockIndex(), toolCall, partial: output });
+        stream.push({ type: "toolcall_end", ...currentEventContext("toolcall_end"), toolCall });
       } else if (item.type === "web_search_call") {
         const resultBlockIndex = state.searchResultBlockById.get(item.id);
         if (resultBlockIndex == null) {
           output.content.push({
             type: "webSearchResult",
             toolUseId: item.id,
-            content: buildWebSearchResultContent(extractActionSources(item.action)),
+            content: buildWebSearchResultContent(
+              resolveWebSearchResultSources(extractStructuredSearchCallSources(item.action, item.results), []),
+            ),
           });
           state.searchResultBlockById.set(item.id, blockIndex());
-          stream.push({ type: "web_search_result", contentIndex: blockIndex(), partial: output });
+          stream.push({ type: "web_search_result", ...currentEventContext("web_search_result") });
         }
       }
     } else if (event.type === "response.completed") {
       const response = event.response;
-      enrichOutputFromCompletedResponse(output, response, state, stream);
+      enrichOutputFromCompletedResponse(output, response, state, stream, compactStreamEvents);
       if (response?.usage) {
         const cachedTokens = response.usage.input_tokens_details?.cached_tokens || 0;
         output.usage = {
@@ -629,6 +759,9 @@ async function processResponsesStreamWithSearchDisplay(openaiStream, output, str
       output.stopReason = mapStopReason(response?.status);
       if (output.content.some((block) => block.type === "toolCall") && output.stopReason === "stop") {
         output.stopReason = "toolUse";
+      }
+      if (compactStreamEvents) {
+        output.content = output.content.filter((block) => block?.type !== "thinking");
       }
     } else if (event.type === "error") {
       throw new Error(`Error Code ${event.code}: ${event.message}` || "Unknown error");

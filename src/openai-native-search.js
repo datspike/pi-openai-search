@@ -12,6 +12,7 @@ export const CUSTOM_SEARCH_TOOL_NAMES = new Set([
 
 export const OPENAI_NATIVE_SEARCH_INCLUDE_FIELDS = new Set([
   "web_search_call.action.sources",
+  "web_search_call.results",
 ]);
 
 /**
@@ -168,11 +169,22 @@ export function buildWebSearchTool(config) {
  * @returns {void}
  */
 export function ensureNativeSearchIncludes(payload) {
-  const includes = Array.isArray(payload.include) ? [...payload.include] : [];
-  const present = new Set(includes);
+  const includes = [];
+  const present = new Set();
+
+  if (Array.isArray(payload.include)) {
+    for (const field of payload.include) {
+      if (typeof field !== "string" || present.has(field)) {
+        continue;
+      }
+      present.add(field);
+      includes.push(field);
+    }
+  }
 
   for (const field of OPENAI_NATIVE_SEARCH_INCLUDE_FIELDS) {
     if (!present.has(field)) {
+      present.add(field);
       includes.push(field);
     }
   }
