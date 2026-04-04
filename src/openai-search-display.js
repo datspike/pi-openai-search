@@ -113,6 +113,44 @@ export function extractUrlsFromText(text) {
 }
 
 /**
+ * Извлечение markdown/plain-text источников из текста assistant.
+ *
+ * @param {string} text Текст ответа.
+ * @returns {Array<{title: string, url: string}>} Источники из текста.
+ */
+export function extractInlineSourcesFromText(text) {
+  const normalizedText = String(text || "");
+  const result = [];
+  const seen = new Set();
+
+  const markdownLinkPattern = /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/gu;
+  for (const match of normalizedText.matchAll(markdownLinkPattern)) {
+    const title = String(match[1] || "").trim();
+    const url = String(match[2] || "").trim();
+    if (!url || seen.has(url)) {
+      continue;
+    }
+
+    seen.add(url);
+    result.push({
+      title: title || url,
+      url,
+    });
+  }
+
+  for (const url of extractUrlsFromText(normalizedText)) {
+    if (seen.has(url)) {
+      continue;
+    }
+
+    seen.add(url);
+    result.push({ title: url, url });
+  }
+
+  return result;
+}
+
+/**
  * Добавление блока citations в конец текста, если URL ещё не видны в сообщении.
  *
  * @param {string} text Исходный текст.
@@ -166,6 +204,33 @@ export function summarizeSearchInput(action) {
   }
 
   return summary;
+}
+
+/**
+ * Выбор источников для результата web_search в tool-use блоке.
+ *
+ * Приоритет:
+ * 1. `web_search_call.action.sources`
+ * 2. annotations из assistant message
+ * 3. агрегированный fallback по всему response
+ *
+ * @param {Array<{title: string, url: string}> | undefined} actionSources Источники из action.sources.
+ * @param {Array<{title: string, url: string}> | undefined} annotationSources Источники из annotations.
+ * @param {Array<{title: string, url: string}> | undefined} fallbackSources Общий fallback-список.
+ * @returns {Array<{title: string, url: string}>} Источники для webSearchResult.
+ */
+export function resolveWebSearchResultSources(actionSources, annotationSources, fallbackSources) {
+  const directSources = dedupeSources(actionSources || []);
+  if (directSources.length > 0) {
+    return directSources;
+  }
+
+  const messageSources = dedupeSources(annotationSources || []);
+  if (messageSources.length > 0) {
+    return messageSources;
+  }
+
+  return dedupeSources(fallbackSources || []);
 }
 
 /**

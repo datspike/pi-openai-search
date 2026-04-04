@@ -14,6 +14,8 @@ import {
   dedupeSources,
   extractActionSources,
   extractAnnotationSources,
+  extractInlineSourcesFromText,
+  resolveWebSearchResultSources,
   summarizeSearchInput,
 } from "./openai-search-display.js";
 
@@ -281,11 +283,27 @@ function mapStopReason(status) {
  */
 function enrichOutputFromCompletedResponse(output, response, state, stream) {
   const responseOutput = Array.isArray(response?.output) ? response.output : [];
+  const annotationSources = dedupeSources(
+    responseOutput
+      .filter((item) => item?.type === "message")
+      .flatMap((item) => extractAnnotationSources(item)),
+  );
+  const inlineTextSources = dedupeSources(
+    responseOutput
+      .filter((item) => item?.type === "message")
+      .flatMap((item) => {
+        const content = Array.isArray(item?.content) ? item.content : [];
+        return content
+          .filter((part) => part?.type === "output_text" && typeof part.text === "string")
+          .flatMap((part) => extractInlineSourcesFromText(part.text));
+      }),
+  );
   const allSources = dedupeSources(
     responseOutput
       .filter((item) => item?.type === "web_search_call")
       .flatMap((item) => extractActionSources(item.action)),
   );
+  const fallbackSources = dedupeSources([...inlineTextSources, ...allSources]);
 
   for (const item of responseOutput) {
     if (item?.type === "web_search_call") {
@@ -311,7 +329,12 @@ function enrichOutputFromCompletedResponse(output, response, state, stream) {
         }
       }
 
-      const resultContent = buildWebSearchResultContent(extractActionSources(item.action));
+      const resultSources = resolveWebSearchResultSources(
+        extractActionSources(item.action),
+        annotationSources,
+        fallbackSources,
+      );
+      const resultContent = buildWebSearchResultContent(resultSources);
       const resultBlockIndex = state.searchResultBlockById.get(item.id);
       if (resultBlockIndex == null) {
         output.content.push({
@@ -348,8 +371,8 @@ function enrichOutputFromCompletedResponse(output, response, state, stream) {
       continue;
     }
 
-    const annotationSources = extractAnnotationSources(item);
-    const mergedSources = annotationSources.length > 0 ? annotationSources : allSources;
+    const itemAnnotationSources = extractAnnotationSources(item);
+    const mergedSources = itemAnnotationSources.length > 0 ? itemAnnotationSources : allSources;
     block.text = appendStructuredCitations(block.text, mergedSources);
   }
 }

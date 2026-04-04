@@ -12,7 +12,12 @@ import {
   isOpenAIResponsesModel,
   loadNativeSearchConfig,
 } from "../src/openai-native-search.js";
-import { appendStructuredCitations } from "../src/openai-search-display.js";
+import {
+  appendStructuredCitations,
+  buildWebSearchResultContent,
+  extractInlineSourcesFromText,
+  resolveWebSearchResultSources,
+} from "../src/openai-search-display.js";
 
 test("isOpenAIResponsesModel detects supported transports", () => {
   assert.equal(isOpenAIResponsesModel({ api: "openai-responses" }), true);
@@ -179,6 +184,54 @@ test("appendStructuredCitations appends only missing URLs", () => {
     { title: "OpenAI docs", url: "https://platform.openai.com/docs/guides/tools-web-search" },
   ]);
   assert.equal(preserved, next);
+});
+
+test("resolveWebSearchResultSources falls back to annotations when action sources are empty", () => {
+  const result = resolveWebSearchResultSources(
+    [],
+    [{ title: "OpenAI blog", url: "https://openai.com/index/openai-acquires-tbpn" }],
+    [{ title: "Fallback", url: "https://example.com/fallback" }],
+  );
+
+  assert.deepEqual(result, [
+    { title: "OpenAI blog", url: "https://openai.com/index/openai-acquires-tbpn" },
+  ]);
+  assert.deepEqual(buildWebSearchResultContent(result), [
+    {
+      type: "web_search_result",
+      title: "OpenAI blog",
+      url: "https://openai.com/index/openai-acquires-tbpn",
+    },
+  ]);
+});
+
+test("resolveWebSearchResultSources keeps action sources ahead of annotation fallback", () => {
+  const result = resolveWebSearchResultSources(
+    [{ title: "Action source", url: "https://example.com/action" }],
+    [{ title: "Annotation source", url: "https://example.com/annotation" }],
+    [{ title: "Fallback source", url: "https://example.com/fallback" }],
+  );
+
+  assert.deepEqual(result, [
+    { title: "Action source", url: "https://example.com/action" },
+  ]);
+});
+
+test("extractInlineSourcesFromText extracts markdown links before plain URLs", () => {
+  const result = extractInlineSourcesFromText(
+    "- [OpenAI acquires TBPN](https://www.axios.com/2026/04/02/openai-acquires-tbpn)\n- Raw URL: https://openai.com/index/openai-acquires-tbpn",
+  );
+
+  assert.deepEqual(result, [
+    {
+      title: "OpenAI acquires TBPN",
+      url: "https://www.axios.com/2026/04/02/openai-acquires-tbpn",
+    },
+    {
+      title: "https://openai.com/index/openai-acquires-tbpn",
+      url: "https://openai.com/index/openai-acquires-tbpn",
+    },
+  ]);
 });
 
 test("extension updates TUI status for native web search lifecycle", async () => {
@@ -522,10 +575,18 @@ try {
 
   const memoryLast = session.messages.at(-1);
   const persistedLast = sessionManager.buildSessionContext().messages.at(-1);
+  const memoryResultBlock = Array.isArray(memoryLast?.content)
+    ? memoryLast.content.find((block) => block?.type === "webSearchResult")
+    : undefined;
+  const persistedResultBlock = Array.isArray(persistedLast?.content)
+    ? persistedLast.content.find((block) => block?.type === "webSearchResult")
+    : undefined;
   console.log(JSON.stringify({
     model: { provider: model.provider, id: model.id, api: model.api },
     memoryTypes: Array.isArray(memoryLast?.content) ? memoryLast.content.map((block) => block.type) : null,
     persistedTypes: Array.isArray(persistedLast?.content) ? persistedLast.content.map((block) => block.type) : null,
+    memoryResultContent: memoryResultBlock?.content ?? null,
+    persistedResultContent: persistedResultBlock?.content ?? null,
     stopReason: memoryLast?.stopReason,
   }));
 } finally {
@@ -560,6 +621,12 @@ process.exit(0);
     });
     assert.deepEqual(result.memoryTypes, ["serverToolUse", "webSearchResult", "text"]);
     assert.deepEqual(result.persistedTypes, ["serverToolUse", "webSearchResult", "text"]);
+    assert.ok(Array.isArray(result.memoryResultContent), "memory webSearchResult should contain search result entries");
+    assert.ok(Array.isArray(result.persistedResultContent), "persisted webSearchResult should contain search result entries");
+    assert.ok(result.memoryResultContent.length > 0, "memory webSearchResult should not be empty");
+    assert.ok(result.persistedResultContent.length > 0, "persisted webSearchResult should not be empty");
+    assert.equal(result.memoryResultContent[0]?.type, "web_search_result");
+    assert.equal(result.persistedResultContent[0]?.type, "web_search_result");
     assert.equal(result.stopReason, "stop");
   },
 );
