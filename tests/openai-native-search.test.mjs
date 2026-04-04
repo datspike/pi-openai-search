@@ -1,7 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -181,8 +180,94 @@ test("appendStructuredCitations appends only missing URLs", () => {
   assert.equal(preserved, next);
 });
 
+test("debug snapshot write failures do not escape extension handlers", async () => {
+  const tempDir = fs.mkdtempSync(path.join(process.cwd(), ".tmp-pi-openai-search-index-test-"));
+
+  try {
+    const sourcePath = fileURLToPath(new URL("../index.js", import.meta.url));
+    const mockFsPromisesPath = path.join(tempDir, "fs-promises-mock.js");
+    const mockNativeSearchPath = path.join(tempDir, "openai-native-search-mock.js");
+    const mockDisplayPatchPath = path.join(tempDir, "openai-responses-display-patch-mock.js");
+    const transformedModulePath = path.join(tempDir, "index.testable.mjs");
+
+    fs.writeFileSync(
+      mockFsPromisesPath,
+      [
+        'export async function mkdir() {}',
+        'export async function writeFile() { throw new Error("debug write failed"); }',
+      ].join("\n"),
+      "utf8",
+    );
+
+    fs.writeFileSync(
+      mockNativeSearchPath,
+      [
+        'export function injectNativeWebSearch(payload) { return { ...payload, injected: true }; }',
+        'export function isOpenAIResponsesModel() { return true; }',
+        'export function loadNativeSearchConfig() { return { enabled: true, mode: "live" }; }',
+      ].join("\n"),
+      "utf8",
+    );
+
+    fs.writeFileSync(
+      mockDisplayPatchPath,
+      ['export function registerOpenAIResponsesDisplayPatch() {}'].join("\n"),
+      "utf8",
+    );
+
+    const originalSource = fs.readFileSync(sourcePath, "utf8");
+    const transformedSource = originalSource
+      .replace('"node:fs/promises"', JSON.stringify(pathToFileURL(mockFsPromisesPath).href))
+      .replace('"./src/openai-native-search.js"', JSON.stringify(pathToFileURL(mockNativeSearchPath).href))
+      .replace(
+        '"./src/openai-responses-display-patch.js"',
+        JSON.stringify(pathToFileURL(mockDisplayPatchPath).href),
+      );
+
+    fs.writeFileSync(transformedModulePath, transformedSource, "utf8");
+    const extensionModule = await import(pathToFileURL(transformedModulePath).href);
+
+    const handlers = new Map();
+    extensionModule.default({
+      on(event, handler) {
+        handlers.set(event, handler);
+      },
+    });
+
+    assert.equal(typeof handlers.get("before_provider_request"), "function");
+    assert.equal(typeof handlers.get("message_end"), "function");
+
+    process.env.PI_OPENAI_NATIVE_SEARCH_DEBUG_FILE = path.join(tempDir, "payload.json");
+    process.env.PI_OPENAI_NATIVE_SEARCH_DEBUG_MESSAGE_FILE = path.join(tempDir, "message.json");
+
+    assert.doesNotThrow(() => {
+      handlers.get("before_provider_request")({
+        payload: { tools: [] },
+        model: { api: "openai-responses", provider: "openai" },
+      });
+    });
+
+    await assert.doesNotReject(async () => {
+      await handlers.get("message_end")({
+        message: {
+          role: "assistant",
+          api: "openai-responses",
+          provider: "openai",
+          model: "gpt-5.4",
+          stopReason: "stop",
+          content: [{ type: "text", text: "ok" }],
+        },
+      });
+    });
+  } finally {
+    delete process.env.PI_OPENAI_NATIVE_SEARCH_DEBUG_FILE;
+    delete process.env.PI_OPENAI_NATIVE_SEARCH_DEBUG_MESSAGE_FILE;
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("registerOpenAIResponsesDisplayPatch re-registers provider on repeated calls", async () => {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-openai-search-test-"));
+  const tempDir = fs.mkdtempSync(path.join(process.cwd(), ".tmp-pi-openai-search-test-"));
 
   try {
     const sourcePath = fileURLToPath(new URL("../src/openai-responses-display-patch.js", import.meta.url));

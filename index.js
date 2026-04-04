@@ -164,15 +164,23 @@ export default function registerOpenAISearchExtension(pi) {
     const nextPayload = injectNativeWebSearch(payload, event?.model, config);
     const debugPath = process.env.PI_OPENAI_NATIVE_SEARCH_DEBUG_FILE;
     if (debugPath) {
-      void writeDebugSnapshot(debugPath, event?.model, nextPayload);
+      void writeDebugSnapshot(debugPath, event?.model, nextPayload).catch(() => {
+        // best-effort debug snapshot without runtime impact
+      });
     }
     return nextPayload;
   });
 
   pi.on("message_end", async (event) => {
     const debugPath = process.env.PI_OPENAI_NATIVE_SEARCH_DEBUG_MESSAGE_FILE;
-    if (debugPath) {
+    if (!debugPath) {
+      return;
+    }
+
+    try {
       await writeMessageDebugSnapshot(debugPath, event?.message);
+    } catch {
+      // best-effort debug snapshot without runtime impact
     }
   });
 }
