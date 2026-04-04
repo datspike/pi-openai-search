@@ -6,11 +6,10 @@ import {
   isOpenAIResponsesModel,
   loadNativeSearchConfig,
 } from "./src/openai-native-search.js";
+import { getFactualSearchLifecycleUpdate } from "./src/openai-search-display.js";
 import { registerOpenAIResponsesDisplayPatch } from "./src/openai-responses-display-patch.js";
 
 const NATIVE_SEARCH_STATUS_KEY = "openai-native-web-search";
-const NATIVE_SEARCH_WORKING_MESSAGE = "Native web search in progress...";
-const URL_PATTERN = /https?:\/\/[^\s)\]>"']+/g;
 
 /**
  * Отладочный снимок payload перед отправкой провайдеру.
@@ -112,42 +111,19 @@ async function writeMessageDebugSnapshot(path, message) {
 }
 
 /**
- * Проверка наличия native web_search в provider payload.
+ * Получение последнего активного factual search.
  *
- * @param {any} payload Provider payload.
- * @returns {boolean} Признак наличия native web_search.
+ * @param {Map<string, {statusText: string, workingMessage: string}>} activeSearches Активные поиски.
+ * @returns {{statusText: string, workingMessage: string} | undefined} Последний активный поиск.
  */
-function hasNativeWebSearchTool(payload) {
-  return Array.isArray(payload?.tools) && payload.tools.some((tool) => tool?.type === "web_search");
-}
+function getLastActiveSearch(activeSearches) {
+  let lastActiveSearch;
 
-/**
- * Извлечение текстового ответа assistant message.
- *
- * @param {any} message Финальное сообщение assistant.
- * @returns {string} Склеенный текст ответа.
- */
-function getAssistantText(message) {
-  if (!Array.isArray(message?.content)) {
-    return "";
+  for (const activeSearch of activeSearches.values()) {
+    lastActiveSearch = activeSearch;
   }
 
-  return message.content
-    .filter((block) => block?.type === "text" && typeof block.text === "string")
-    .map((block) => block.text)
-    .join("\n\n");
-}
-
-/**
- * Извлечение уникальных URL из текстового ответа assistant.
- *
- * @param {any} message Финальное сообщение assistant.
- * @returns {string[]} Уникальные URL.
- */
-function extractAssistantUrls(message) {
-  const matches = getAssistantText(message).match(URL_PATTERN) || [];
-  const urls = matches.map((url) => url.replace(/[.,;:!?]+$/u, ""));
-  return [...new Set(urls)];
+  return lastActiveSearch;
 }
 
 /**
@@ -162,7 +138,8 @@ export default function registerOpenAISearchExtension(pi) {
   registerOpenAIResponsesDisplayPatch();
 
   let lastStatusKey;
-  let nativeSearchInFlight = false;
+  let nativeReadyStatus;
+  const activeSearches = new Map();
 
   pi.on("model_select", async (event, ctx) => {
     const config = loadNativeSearchConfig();
@@ -181,9 +158,11 @@ export default function registerOpenAISearchExtension(pi) {
       return;
     }
     lastStatusKey = statusKey;
+    nativeReadyStatus = nativeActive ? "web: ready" : undefined;
+    activeSearches.clear();
 
     ctx.ui.setWorkingMessage();
-    ctx.ui.setStatus(NATIVE_SEARCH_STATUS_KEY, nativeActive ? "web: ready" : undefined);
+    ctx.ui.setStatus(NATIVE_SEARCH_STATUS_KEY, nativeReadyStatus);
 
     if (nativeActive) {
       const parts = [
@@ -201,7 +180,7 @@ export default function registerOpenAISearchExtension(pi) {
     }
   });
 
-  pi.on("before_provider_request", (event, ctx) => {
+  pi.on("before_provider_request", (event) => {
     const payload = event?.payload;
     if (!payload || typeof payload !== "object") {
       return;
@@ -209,12 +188,6 @@ export default function registerOpenAISearchExtension(pi) {
 
     const config = loadNativeSearchConfig();
     const nextPayload = injectNativeWebSearch(payload, event?.model, config);
-
-    if (ctx?.hasUI && hasNativeWebSearchTool(nextPayload)) {
-      nativeSearchInFlight = true;
-      ctx.ui.setWorkingMessage(NATIVE_SEARCH_WORKING_MESSAGE);
-      ctx.ui.setStatus(NATIVE_SEARCH_STATUS_KEY, "web: searching");
-    }
 
     const debugPath = process.env.PI_OPENAI_NATIVE_SEARCH_DEBUG_FILE;
     if (debugPath) {
@@ -225,13 +198,49 @@ export default function registerOpenAISearchExtension(pi) {
     return nextPayload;
   });
 
+  pi.on("message_update", (event, ctx) => {
+    const lifecycleUpdate = getFactualSearchLifecycleUpdate(event?.assistantMessageEvent);
+    if (!lifecycleUpdate) {
+      return;
+    }
+
+    if (lifecycleUpdate.phase === "searching") {
+      activeSearches.set(lifecycleUpdate.toolUseId, {
+        statusText: lifecycleUpdate.statusText,
+        workingMessage: lifecycleUpdate.workingMessage,
+      });
+    } else {
+      activeSearches.delete(lifecycleUpdate.toolUseId);
+    }
+
+    if (!ctx?.hasUI) {
+      return;
+    }
+
+    if (lifecycleUpdate.phase === "searching") {
+      ctx.ui.setWorkingMessage(lifecycleUpdate.workingMessage);
+      ctx.ui.setStatus(NATIVE_SEARCH_STATUS_KEY, lifecycleUpdate.statusText);
+      return;
+    }
+
+    const lastActiveSearch = getLastActiveSearch(activeSearches);
+    if (lastActiveSearch) {
+      ctx.ui.setWorkingMessage(lastActiveSearch.workingMessage);
+      ctx.ui.setStatus(NATIVE_SEARCH_STATUS_KEY, lastActiveSearch.statusText);
+      return;
+    }
+
+    ctx.ui.setWorkingMessage();
+    ctx.ui.setStatus(NATIVE_SEARCH_STATUS_KEY, lifecycleUpdate.statusText || nativeReadyStatus);
+  });
+
   pi.on("message_end", async (event, ctx) => {
-    if (event?.message?.role === "assistant" && nativeSearchInFlight && ctx?.hasUI) {
-      nativeSearchInFlight = false;
-      ctx.ui.setWorkingMessage();
-      const urls = extractAssistantUrls(event.message);
-      const resultLabel = urls.length > 0 ? `web: ${urls.length} source${urls.length === 1 ? "" : "s"}` : "web: finished";
-      ctx.ui.setStatus(NATIVE_SEARCH_STATUS_KEY, resultLabel);
+    if (event?.message?.role === "assistant" && activeSearches.size > 0) {
+      activeSearches.clear();
+      if (ctx?.hasUI) {
+        ctx.ui.setWorkingMessage();
+        ctx.ui.setStatus(NATIVE_SEARCH_STATUS_KEY, nativeReadyStatus);
+      }
     }
 
     const debugPath = process.env.PI_OPENAI_NATIVE_SEARCH_DEBUG_MESSAGE_FILE;

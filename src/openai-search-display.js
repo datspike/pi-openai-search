@@ -250,3 +250,143 @@ export function buildWebSearchResultContent(sources) {
     url: source.url,
   }));
 }
+
+const FACTUAL_SEARCH_LABEL_MAX_LENGTH = 80;
+
+/**
+ * Нормализация короткого текста для factual search label.
+ *
+ * @param {unknown} value Кандидат на label.
+ * @returns {string | undefined} Нормализованная строка.
+ */
+function normalizeFactualSearchLabel(value) {
+  const normalized = String(value || "").replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return undefined;
+  }
+
+  if (normalized.length <= FACTUAL_SEARCH_LABEL_MAX_LENGTH) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, FACTUAL_SEARCH_LABEL_MAX_LENGTH - 3).trimEnd()}...`;
+}
+
+/**
+ * Извлечение правдивого descriptor search action из tool input.
+ *
+ * @param {unknown} input Input serverToolUse.
+ * @returns {string | undefined} Query/url descriptor без prompt-derived fallback.
+ */
+export function formatFactualSearchDescriptor(input) {
+  if (!input || typeof input !== "object") {
+    return undefined;
+  }
+
+  const query = normalizeFactualSearchLabel(input.query);
+  if (query) {
+    return query;
+  }
+
+  if (Array.isArray(input.queries)) {
+    const queries = input.queries.map(normalizeFactualSearchLabel).filter(Boolean);
+    if (queries.length === 1) {
+      return queries[0];
+    }
+    if (queries.length > 1) {
+      return `${queries[0]} (+${queries.length - 1})`;
+    }
+  }
+
+  const url = normalizeFactualSearchLabel(input.url || input.page_url);
+  if (url) {
+    return url;
+  }
+
+  const pattern = normalizeFactualSearchLabel(input.pattern);
+  if (pattern) {
+    return `find ${pattern}`;
+  }
+
+  return undefined;
+}
+
+/**
+ * Формирование footer/status для factual search result.
+ *
+ * @param {unknown} content Content webSearchResult.
+ * @returns {string} Короткий status label.
+ */
+export function formatWebSearchResultStatus(content) {
+  if (Array.isArray(content)) {
+    const resultCount = content.filter((item) => item?.type === "web_search_result").length || content.length;
+    if (resultCount > 0) {
+      return `web: ${resultCount} source${resultCount === 1 ? "" : "s"}`;
+    }
+  }
+
+  if (content && typeof content === "object" && "type" in content) {
+    if (content.type === "web_search_tool_result_error") {
+      return "web: error";
+    }
+    if (content.type === "web_search_tool_result_complete") {
+      return "web: finished";
+    }
+  }
+
+  return "web: finished";
+}
+
+/**
+ * Извлечение lifecycle update только из реальных search stream events.
+ *
+ * @param {any} assistantMessageEvent Event из `message_update`.
+ * @returns {{phase: "searching", toolUseId: string, statusText: string, workingMessage: string} | {phase: "complete", toolUseId: string, statusText: string, workingMessage: undefined} | null} Lifecycle update или null.
+ */
+export function getFactualSearchLifecycleUpdate(assistantMessageEvent) {
+  if (!assistantMessageEvent || typeof assistantMessageEvent !== "object") {
+    return null;
+  }
+
+  if (assistantMessageEvent.type !== "server_tool_use" && assistantMessageEvent.type !== "web_search_result") {
+    return null;
+  }
+
+  if (!Array.isArray(assistantMessageEvent.partial?.content) || typeof assistantMessageEvent.contentIndex !== "number") {
+    return null;
+  }
+
+  const content = assistantMessageEvent.partial.content[assistantMessageEvent.contentIndex];
+  if (!content || typeof content !== "object") {
+    return null;
+  }
+
+  if (assistantMessageEvent.type === "server_tool_use") {
+    if (content.type !== "serverToolUse" || content.name !== "web_search" || !content.id) {
+      return null;
+    }
+
+    const descriptor = formatFactualSearchDescriptor(content.input);
+    if (!descriptor) {
+      return null;
+    }
+
+    return {
+      phase: "searching",
+      toolUseId: content.id,
+      statusText: `web: ${descriptor}`,
+      workingMessage: `Searching the web: ${descriptor}`,
+    };
+  }
+
+  if (content.type !== "webSearchResult" || !content.toolUseId) {
+    return null;
+  }
+
+  return {
+    phase: "complete",
+    toolUseId: content.toolUseId,
+    statusText: formatWebSearchResultStatus(content.content),
+    workingMessage: undefined,
+  };
+}
