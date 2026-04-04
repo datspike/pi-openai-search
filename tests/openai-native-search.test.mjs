@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
@@ -417,3 +418,148 @@ test("registerOpenAIResponsesDisplayPatch re-registers provider on repeated call
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
 });
+
+test("loadExtensions replaces openai-responses provider in shared pi-ai registry", async (t) => {
+  if (!process.env.GSD_BIN_PATH) {
+    t.skip("GSD_BIN_PATH is required for gsd-pi integration test");
+    return;
+  }
+
+  const gsdRoot = path.resolve(
+    path.dirname(process.env.GSD_BIN_PATH),
+    "..",
+    "lib",
+    "node_modules",
+    "gsd-pi",
+  );
+  const piAiModule = await import(pathToFileURL(path.join(gsdRoot, "packages/pi-ai/dist/index.js")).href);
+  const loaderModule = await import(
+    pathToFileURL(path.join(gsdRoot, "packages/pi-coding-agent/dist/core/extensions/loader.js")).href
+  );
+
+  piAiModule.resetApiProviders();
+  const before = piAiModule.getApiProvider("openai-responses");
+
+  try {
+    const result = await loaderModule.loadExtensions([path.resolve("index.js")], process.cwd());
+    const after = piAiModule.getApiProvider("openai-responses");
+
+    assert.equal(result.errors.length, 0);
+    assert.equal(result.extensions.length, 1);
+    assert.notEqual(after, before);
+    assert.equal(typeof after?.streamSimple, "function");
+    assert.equal(typeof after?.stream, "function");
+  } finally {
+    piAiModule.resetApiProviders();
+  }
+});
+
+test(
+  "live createAgentSession persists native web search blocks in assistant history",
+  { timeout: 240_000 },
+  async (t) => {
+    if (!process.env.PI_OPENAI_NATIVE_SEARCH_LIVE_TEST) {
+      t.skip("set PI_OPENAI_NATIVE_SEARCH_LIVE_TEST=1 to run live OpenAI regression");
+      return;
+    }
+    if (!process.env.OPENAI_API_KEY) {
+      t.skip("OPENAI_API_KEY is required for live OpenAI regression");
+      return;
+    }
+    if (!process.env.GSD_BIN_PATH) {
+      t.skip("GSD_BIN_PATH is required for gsd-pi live regression");
+      return;
+    }
+
+    const childScript = String.raw`
+import fs from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+const repoRoot = process.cwd();
+const gsdRoot = path.resolve(path.dirname(process.env.GSD_BIN_PATH), "..", "lib", "node_modules", "gsd-pi");
+const tempDir = fs.mkdtempSync(path.join(repoRoot, ".tmp-pi-openai-search-live-"));
+const sessionDir = path.join(tempDir, "sessions");
+const agentDir = "/home/spike/.gsd/agent";
+
+const { DefaultResourceLoader } = await import(pathToFileURL(path.join(gsdRoot, "packages/pi-coding-agent/dist/core/resource-loader.js")).href);
+const { SettingsManager } = await import(pathToFileURL(path.join(gsdRoot, "packages/pi-coding-agent/dist/core/settings-manager.js")).href);
+const { AuthStorage } = await import(pathToFileURL(path.join(gsdRoot, "packages/pi-coding-agent/dist/core/auth-storage.js")).href);
+const { ModelRegistry } = await import(pathToFileURL(path.join(gsdRoot, "packages/pi-coding-agent/dist/core/model-registry.js")).href);
+const { SessionManager } = await import(pathToFileURL(path.join(gsdRoot, "packages/pi-coding-agent/dist/core/session-manager.js")).href);
+const { createAgentSession } = await import(pathToFileURL(path.join(gsdRoot, "packages/pi-coding-agent/dist/core/sdk.js")).href);
+
+try {
+  const settingsManager = SettingsManager.create(repoRoot, agentDir);
+  const authStorage = AuthStorage.create(path.join(agentDir, "auth.json"));
+  const modelRegistry = new ModelRegistry(authStorage, path.join(agentDir, "models.json"));
+  const model = modelRegistry.find("openai", "gpt-5.4");
+  if (!model) {
+    throw new Error("openai/gpt-5.4 model is not available in model registry");
+  }
+
+  const loader = new DefaultResourceLoader({
+    cwd: repoRoot,
+    agentDir,
+    settingsManager,
+    additionalExtensionPaths: [path.resolve(repoRoot, "index.js")],
+  });
+  await loader.reload();
+
+  const sessionManager = SessionManager.create(repoRoot, sessionDir);
+  const { session } = await createAgentSession({
+    cwd: repoRoot,
+    agentDir,
+    resourceLoader: loader,
+    modelRegistry,
+    authStorage,
+    model,
+    thinkingLevel: "off",
+    sessionManager,
+  });
+
+  await session.prompt("Search the web for the latest OpenAI news today. Return exactly one bullet with one link.");
+
+  const memoryLast = session.messages.at(-1);
+  const persistedLast = sessionManager.buildSessionContext().messages.at(-1);
+  console.log(JSON.stringify({
+    model: { provider: model.provider, id: model.id, api: model.api },
+    memoryTypes: Array.isArray(memoryLast?.content) ? memoryLast.content.map((block) => block.type) : null,
+    persistedTypes: Array.isArray(persistedLast?.content) ? persistedLast.content.map((block) => block.type) : null,
+    stopReason: memoryLast?.stopReason,
+  }));
+} finally {
+  fs.rmSync(tempDir, { recursive: true, force: true });
+}
+process.exit(0);
+`;
+
+    const child = spawnSync(process.execPath, ["--input-type=module", "-e", childScript], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        PI_OPENAI_NATIVE_SEARCH: "1",
+        PI_OPENAI_NATIVE_SEARCH_MODE: "live",
+      },
+      encoding: "utf8",
+      timeout: 230_000,
+      maxBuffer: 1024 * 1024,
+    });
+
+    if (child.error) {
+      throw child.error;
+    }
+
+    assert.equal(child.status, 0, child.stderr || child.stdout);
+
+    const result = JSON.parse(child.stdout.trim());
+    assert.deepEqual(result.model, {
+      provider: "openai",
+      id: "gpt-5.4",
+      api: "openai-responses",
+    });
+    assert.deepEqual(result.memoryTypes, ["serverToolUse", "webSearchResult", "text"]);
+    assert.deepEqual(result.persistedTypes, ["serverToolUse", "webSearchResult", "text"]);
+    assert.equal(result.stopReason, "stop");
+  },
+);
