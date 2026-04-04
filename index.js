@@ -8,6 +8,10 @@ import {
 } from "./src/openai-native-search.js";
 import { registerOpenAIResponsesDisplayPatch } from "./src/openai-responses-display-patch.js";
 
+const NATIVE_SEARCH_STATUS_KEY = "openai-native-web-search";
+const NATIVE_SEARCH_WORKING_MESSAGE = "Native web search in progress...";
+const URL_PATTERN = /https?:\/\/[^\s)\]>"']+/g;
+
 /**
  * Отладочный снимок payload перед отправкой провайдеру.
  *
@@ -108,6 +112,45 @@ async function writeMessageDebugSnapshot(path, message) {
 }
 
 /**
+ * Проверка наличия native web_search в provider payload.
+ *
+ * @param {any} payload Provider payload.
+ * @returns {boolean} Признак наличия native web_search.
+ */
+function hasNativeWebSearchTool(payload) {
+  return Array.isArray(payload?.tools) && payload.tools.some((tool) => tool?.type === "web_search");
+}
+
+/**
+ * Извлечение текстового ответа assistant message.
+ *
+ * @param {any} message Финальное сообщение assistant.
+ * @returns {string} Склеенный текст ответа.
+ */
+function getAssistantText(message) {
+  if (!Array.isArray(message?.content)) {
+    return "";
+  }
+
+  return message.content
+    .filter((block) => block?.type === "text" && typeof block.text === "string")
+    .map((block) => block.text)
+    .join("\n\n");
+}
+
+/**
+ * Извлечение уникальных URL из текстового ответа assistant.
+ *
+ * @param {any} message Финальное сообщение assistant.
+ * @returns {string[]} Уникальные URL.
+ */
+function extractAssistantUrls(message) {
+  const matches = getAssistantText(message).match(URL_PATTERN) || [];
+  const urls = matches.map((url) => url.replace(/[.,;:!?]+$/u, ""));
+  return [...new Set(urls)];
+}
+
+/**
  * POC extension для native OpenAI web_search.
  *
  * Работает только для провайдеров на базе OpenAI Responses API.
@@ -119,6 +162,7 @@ export default function registerOpenAISearchExtension(pi) {
   registerOpenAIResponsesDisplayPatch();
 
   let lastStatusKey;
+  let nativeSearchInFlight = false;
 
   pi.on("model_select", async (event, ctx) => {
     const config = loadNativeSearchConfig();
@@ -138,6 +182,9 @@ export default function registerOpenAISearchExtension(pi) {
     }
     lastStatusKey = statusKey;
 
+    ctx.ui.setWorkingMessage();
+    ctx.ui.setStatus(NATIVE_SEARCH_STATUS_KEY, nativeActive ? "web: ready" : undefined);
+
     if (nativeActive) {
       const parts = [
         `Native OpenAI web search active`,
@@ -154,7 +201,7 @@ export default function registerOpenAISearchExtension(pi) {
     }
   });
 
-  pi.on("before_provider_request", (event) => {
+  pi.on("before_provider_request", (event, ctx) => {
     const payload = event?.payload;
     if (!payload || typeof payload !== "object") {
       return;
@@ -162,6 +209,13 @@ export default function registerOpenAISearchExtension(pi) {
 
     const config = loadNativeSearchConfig();
     const nextPayload = injectNativeWebSearch(payload, event?.model, config);
+
+    if (ctx?.hasUI && hasNativeWebSearchTool(nextPayload)) {
+      nativeSearchInFlight = true;
+      ctx.ui.setWorkingMessage(NATIVE_SEARCH_WORKING_MESSAGE);
+      ctx.ui.setStatus(NATIVE_SEARCH_STATUS_KEY, "web: searching");
+    }
+
     const debugPath = process.env.PI_OPENAI_NATIVE_SEARCH_DEBUG_FILE;
     if (debugPath) {
       void writeDebugSnapshot(debugPath, event?.model, nextPayload).catch(() => {
@@ -171,7 +225,15 @@ export default function registerOpenAISearchExtension(pi) {
     return nextPayload;
   });
 
-  pi.on("message_end", async (event) => {
+  pi.on("message_end", async (event, ctx) => {
+    if (event?.message?.role === "assistant" && nativeSearchInFlight && ctx?.hasUI) {
+      nativeSearchInFlight = false;
+      ctx.ui.setWorkingMessage();
+      const urls = extractAssistantUrls(event.message);
+      const resultLabel = urls.length > 0 ? `web: ${urls.length} source${urls.length === 1 ? "" : "s"}` : "web: finished";
+      ctx.ui.setStatus(NATIVE_SEARCH_STATUS_KEY, resultLabel);
+    }
+
     const debugPath = process.env.PI_OPENAI_NATIVE_SEARCH_DEBUG_MESSAGE_FILE;
     if (!debugPath) {
       return;

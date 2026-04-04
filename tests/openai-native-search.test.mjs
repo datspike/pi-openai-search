@@ -180,6 +180,114 @@ test("appendStructuredCitations appends only missing URLs", () => {
   assert.equal(preserved, next);
 });
 
+test("extension updates TUI status for native web search lifecycle", async () => {
+  const tempDir = fs.mkdtempSync(path.join(process.cwd(), ".tmp-pi-openai-search-ui-test-"));
+
+  try {
+    const sourcePath = fileURLToPath(new URL("../index.js", import.meta.url));
+    const mockFsPromisesPath = path.join(tempDir, "fs-promises-mock.js");
+    const mockNativeSearchPath = path.join(tempDir, "openai-native-search-mock.js");
+    const mockDisplayPatchPath = path.join(tempDir, "openai-responses-display-patch-mock.js");
+    const transformedModulePath = path.join(tempDir, "index-ui.testable.mjs");
+
+    fs.writeFileSync(
+      mockFsPromisesPath,
+      [
+        'export async function mkdir() {}',
+        'export async function writeFile() {}',
+      ].join("\n"),
+      "utf8",
+    );
+
+    fs.writeFileSync(
+      mockNativeSearchPath,
+      [
+        'export function injectNativeWebSearch(payload) {',
+        '  return { ...payload, tools: [{ type: "web_search", external_web_access: true }] };',
+        '}',
+        'export function isOpenAIResponsesModel() { return true; }',
+        'export function loadNativeSearchConfig() { return { enabled: true, mode: "live" }; }',
+      ].join("\n"),
+      "utf8",
+    );
+
+    fs.writeFileSync(
+      mockDisplayPatchPath,
+      ['export function registerOpenAIResponsesDisplayPatch() {}'].join("\n"),
+      "utf8",
+    );
+
+    const originalSource = fs.readFileSync(sourcePath, "utf8");
+    const transformedSource = originalSource
+      .replace('"node:fs/promises"', JSON.stringify(pathToFileURL(mockFsPromisesPath).href))
+      .replace('"./src/openai-native-search.js"', JSON.stringify(pathToFileURL(mockNativeSearchPath).href))
+      .replace(
+        '"./src/openai-responses-display-patch.js"',
+        JSON.stringify(pathToFileURL(mockDisplayPatchPath).href),
+      );
+
+    fs.writeFileSync(transformedModulePath, transformedSource, "utf8");
+    const extensionModule = await import(pathToFileURL(transformedModulePath).href);
+
+    const handlers = new Map();
+    extensionModule.default({
+      on(event, handler) {
+        handlers.set(event, handler);
+      },
+    });
+
+    const statusCalls = [];
+    const workingCalls = [];
+    const ctx = {
+      hasUI: true,
+      ui: {
+        notify() {},
+        setStatus(key, value) {
+          statusCalls.push([key, value]);
+        },
+        setWorkingMessage(value) {
+          workingCalls.push(value);
+        },
+      },
+    };
+
+    const nextPayload = handlers.get("before_provider_request")(
+      {
+        payload: { tools: [] },
+        model: { api: "openai-responses", provider: "openai" },
+      },
+      ctx,
+    );
+
+    assert.deepEqual(nextPayload.tools, [{ type: "web_search", external_web_access: true }]);
+    assert.deepEqual(workingCalls, ["Native web search in progress..."]);
+    assert.deepEqual(statusCalls, [["openai-native-web-search", "web: searching"]]);
+
+    await handlers.get("message_end")(
+      {
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "Sources: https://nodejs.org/en/download and https://nodejs.org/en/blog/release/v24.14.1.",
+            },
+          ],
+        },
+      },
+      ctx,
+    );
+
+    assert.deepEqual(workingCalls, ["Native web search in progress...", undefined]);
+    assert.deepEqual(statusCalls, [
+      ["openai-native-web-search", "web: searching"],
+      ["openai-native-web-search", "web: 2 sources"],
+    ]);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("debug snapshot write failures do not escape extension handlers", async () => {
   const tempDir = fs.mkdtempSync(path.join(process.cwd(), ".tmp-pi-openai-search-index-test-"));
 
