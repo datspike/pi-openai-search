@@ -16,9 +16,15 @@ import {
   appendStructuredCitations,
   buildWebSearchResultContent,
   extractInlineSourcesFromText,
+  formatTruthfulWebSearchDoneLabel,
+  formatTruthfulWebSearchPendingLabel,
   getFactualSearchLifecycleUpdate,
   resolveWebSearchResultSources,
 } from "../src/openai-search-display.js";
+import {
+  applyTruthfulInteractiveWebSearchPatch,
+  registerTruthfulInteractiveWebSearchPatch,
+} from "../src/openai-tool-execution-web-search-patch.js";
 
 async function loadTestableExtensionModule(tempDir, { fsPromisesLines, nativeSearchLines }) {
   const sourcePath = fileURLToPath(new URL("../index.js", import.meta.url));
@@ -26,6 +32,7 @@ async function loadTestableExtensionModule(tempDir, { fsPromisesLines, nativeSea
   const mockFsPromisesPath = path.join(tempDir, "fs-promises-mock.js");
   const mockNativeSearchPath = path.join(tempDir, "openai-native-search-mock.js");
   const mockDisplayPatchPath = path.join(tempDir, "openai-responses-display-patch-mock.js");
+  const mockToolExecutionPatchPath = path.join(tempDir, "openai-tool-execution-web-search-patch-mock.js");
   const transformedModulePath = path.join(tempDir, "index.testable.mjs");
 
   fs.writeFileSync(mockFsPromisesPath, fsPromisesLines.join("\n"), "utf8");
@@ -33,6 +40,11 @@ async function loadTestableExtensionModule(tempDir, { fsPromisesLines, nativeSea
   fs.writeFileSync(
     mockDisplayPatchPath,
     ['export function registerOpenAIResponsesDisplayPatch() {}'].join("\n"),
+    "utf8",
+  );
+  fs.writeFileSync(
+    mockToolExecutionPatchPath,
+    ['export async function registerTruthfulInteractiveWebSearchPatch() {}'].join("\n"),
     "utf8",
   );
 
@@ -44,6 +56,10 @@ async function loadTestableExtensionModule(tempDir, { fsPromisesLines, nativeSea
     .replace(
       '"./src/openai-responses-display-patch.js"',
       JSON.stringify(pathToFileURL(mockDisplayPatchPath).href),
+    )
+    .replace(
+      '"./src/openai-tool-execution-web-search-patch.js"',
+      JSON.stringify(pathToFileURL(mockToolExecutionPatchPath).href),
     );
 
   fs.writeFileSync(transformedModulePath, transformedSource, "utf8");
@@ -263,6 +279,130 @@ test("extractInlineSourcesFromText extracts markdown links before plain URLs", (
       url: "https://openai.com/index/openai-acquires-tbpn",
     },
   ]);
+});
+
+test("truthful web search labels use only factual args", () => {
+  assert.equal(
+    formatTruthfulWebSearchPendingLabel({ query: "latest django version" }),
+    "Searching the web: latest django version",
+  );
+  assert.equal(
+    formatTruthfulWebSearchDoneLabel({ queries: ["openai news", "openai blog"] }),
+    "Searched openai news (+1)",
+  );
+  assert.equal(
+    formatTruthfulWebSearchDoneLabel({ page_url: "https://example.com/post" }),
+    "Searched https://example.com/post",
+  );
+  assert.equal(formatTruthfulWebSearchPendingLabel({ pattern: "tbpn" }), "Searching the web: find tbpn");
+  assert.equal(formatTruthfulWebSearchPendingLabel({}), "Searching the web");
+  assert.equal(formatTruthfulWebSearchDoneLabel({}), "Searched the web");
+});
+
+test("applyTruthfulInteractiveWebSearchPatch rejects incompatible runtime shape", () => {
+  assert.throws(
+    () => applyTruthfulInteractiveWebSearchPatch(class {}, { theme: {}, keyHint() {} }),
+    /formatToolExecution/,
+  );
+});
+
+test("interactive web search patch renders truthful labels for pending and done states", async (t) => {
+  if (!process.env.GSD_BIN_PATH) {
+    t.skip("GSD_BIN_PATH is required for interactive renderer regression");
+    return;
+  }
+
+  await registerTruthfulInteractiveWebSearchPatch();
+
+  const gsdRoot = path.resolve(
+    path.dirname(process.env.GSD_BIN_PATH),
+    "..",
+    "lib",
+    "node_modules",
+    "gsd-pi",
+  );
+  const toolExecutionModule = await import(
+    pathToFileURL(
+      path.join(
+        gsdRoot,
+        "packages",
+        "pi-coding-agent",
+        "dist",
+        "modes",
+        "interactive",
+        "components",
+        "tool-execution.js",
+      ),
+    ).href
+  );
+  const themeModule = await import(
+    pathToFileURL(
+      path.join(
+        gsdRoot,
+        "packages",
+        "pi-coding-agent",
+        "dist",
+        "modes",
+        "interactive",
+        "theme",
+        "theme.js",
+      ),
+    ).href
+  );
+  themeModule.initTheme("default", false);
+
+  const ui = { requestRender() {} };
+  const pendingComponent = new toolExecutionModule.ToolExecutionComponent(
+    "web_search",
+    { query: "latest django version" },
+    {},
+    undefined,
+    ui,
+    process.cwd(),
+  );
+
+  assert.match(pendingComponent.formatToolExecution(), /Searching the web: latest django version/);
+
+  pendingComponent.updateResult(
+    {
+      content: [{ type: "text", text: "https://docs.djangoproject.com/" }],
+      details: {},
+      isError: false,
+    },
+    false,
+  );
+  assert.match(pendingComponent.formatToolExecution(), /Searched latest django version/);
+
+  const malformedComponent = new toolExecutionModule.ToolExecutionComponent(
+    "web_search",
+    {},
+    {},
+    undefined,
+    ui,
+    process.cwd(),
+  );
+  assert.match(malformedComponent.formatToolExecution(), /Searching the web/);
+  malformedComponent.updateResult({ content: [], details: {}, isError: false }, false);
+  assert.match(malformedComponent.formatToolExecution(), /Searched the web/);
+
+  const secondComponent = new toolExecutionModule.ToolExecutionComponent(
+    "web_search",
+    { queries: ["openai news", "openai blog"] },
+    {},
+    undefined,
+    ui,
+    process.cwd(),
+  );
+  secondComponent.updateResult(
+    {
+      content: [{ type: "text", text: "https://openai.com/news/" }],
+      details: {},
+      isError: false,
+    },
+    false,
+  );
+
+  assert.match(secondComponent.formatToolExecution(), /Searched openai news \(\+1\)/);
 });
 
 test("getFactualSearchLifecycleUpdate uses only real search events", () => {

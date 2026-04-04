@@ -8,6 +8,9 @@ import {
 } from "./src/openai-native-search.js";
 import { getFactualSearchLifecycleUpdate } from "./src/openai-search-display.js";
 import { registerOpenAIResponsesDisplayPatch } from "./src/openai-responses-display-patch.js";
+import { registerTruthfulInteractiveWebSearchPatch } from "./src/openai-tool-execution-web-search-patch.js";
+
+await registerTruthfulInteractiveWebSearchPatch();
 
 const NATIVE_SEARCH_STATUS_KEY = "openai-native-web-search";
 

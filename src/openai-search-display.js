@@ -312,6 +312,36 @@ export function formatFactualSearchDescriptor(input) {
 }
 
 /**
+ * Truthful pending label для interactive web_search блока.
+ *
+ * @param {unknown} input Input server-side web_search.
+ * @returns {string} Pending label без synthetic prompt fallback.
+ */
+export function formatTruthfulWebSearchPendingLabel(input) {
+  const descriptor = formatFactualSearchDescriptor(input);
+  if (!descriptor) {
+    return "Searching the web";
+  }
+
+  return `Searching the web: ${descriptor}`;
+}
+
+/**
+ * Truthful done label для interactive web_search блока.
+ *
+ * @param {unknown} input Input server-side web_search.
+ * @returns {string} Done label без synthetic prompt fallback.
+ */
+export function formatTruthfulWebSearchDoneLabel(input) {
+  const descriptor = formatFactualSearchDescriptor(input);
+  if (!descriptor) {
+    return "Searched the web";
+  }
+
+  return `Searched ${descriptor}`;
+}
+
+/**
  * Формирование footer/status для factual search result.
  *
  * @param {unknown} content Content webSearchResult.
@@ -375,7 +405,7 @@ export function getFactualSearchLifecycleUpdate(assistantMessageEvent) {
       phase: "searching",
       toolUseId: content.id,
       statusText: `web: ${descriptor}`,
-      workingMessage: `Searching the web: ${descriptor}`,
+      workingMessage: formatTruthfulWebSearchPendingLabel(content.input),
     };
   }
 
