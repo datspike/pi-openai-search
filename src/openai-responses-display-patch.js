@@ -18,7 +18,6 @@ import {
 } from "./openai-search-display.js";
 
 const OPENAI_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex", "opencode"]);
-const PATCH_FLAG = Symbol.for("pi-openai-search/openai-responses-display-patch");
 
 /**
  * Локальный buildBaseOptions без внутреннего импорта pi-ai.
@@ -698,10 +697,6 @@ export const streamSimplePatchedOpenAIResponses = (model, context, options) => {
  * @returns {void}
  */
 export function registerOpenAIResponsesDisplayPatch() {
-  if (globalThis[PATCH_FLAG]) {
-    return;
-  }
-
   registerApiProvider(
     {
       api: "openai-responses",
@@ -710,6 +705,4 @@ export function registerOpenAIResponsesDisplayPatch() {
     },
     "pi-openai-search",
   );
-
-  globalThis[PATCH_FLAG] = true;
 }

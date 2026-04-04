@@ -1,5 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
   buildWebSearchTool,
@@ -175,4 +179,48 @@ test("appendStructuredCitations appends only missing URLs", () => {
     { title: "OpenAI docs", url: "https://platform.openai.com/docs/guides/tools-web-search" },
   ]);
   assert.equal(preserved, next);
+});
+
+test("registerOpenAIResponsesDisplayPatch re-registers provider on repeated calls", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-openai-search-test-"));
+
+  try {
+    const sourcePath = fileURLToPath(new URL("../src/openai-responses-display-patch.js", import.meta.url));
+    const searchDisplayPath = fileURLToPath(new URL("../src/openai-search-display.js", import.meta.url));
+    const mockPiAiPath = path.join(tempDir, "pi-ai-mock.js");
+    const transformedModulePath = path.join(tempDir, "openai-responses-display-patch.testable.mjs");
+
+    fs.writeFileSync(
+      mockPiAiPath,
+      [
+        'export class AssistantMessageEventStream {}',
+        'export function getEnvApiKey() { return ""; }',
+        'export function registerApiProvider(provider, sourceId) {',
+        '  globalThis.__providerCalls = globalThis.__providerCalls || [];',
+        '  globalThis.__providerCalls.push({ provider, sourceId });',
+        '}',
+        'export function supportsXhigh() { return false; }',
+      ].join("\n"),
+      "utf8",
+    );
+
+    const originalSource = fs.readFileSync(sourcePath, "utf8");
+    const transformedSource = originalSource
+      .replace('"@gsd/pi-ai"', JSON.stringify(pathToFileURL(mockPiAiPath).href))
+      .replace('"./openai-search-display.js"', JSON.stringify(pathToFileURL(searchDisplayPath).href));
+
+    fs.writeFileSync(transformedModulePath, transformedSource, "utf8");
+    delete globalThis.__providerCalls;
+
+    const patchModule = await import(pathToFileURL(transformedModulePath).href);
+    patchModule.registerOpenAIResponsesDisplayPatch();
+    patchModule.registerOpenAIResponsesDisplayPatch();
+
+    assert.equal(globalThis.__providerCalls.length, 2);
+    assert.equal(globalThis.__providerCalls[0].provider.api, "openai-responses");
+    assert.equal(globalThis.__providerCalls[1].provider.api, "openai-responses");
+  } finally {
+    delete globalThis.__providerCalls;
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
 });
