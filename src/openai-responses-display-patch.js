@@ -273,6 +273,24 @@ function mapStopReason(status) {
 }
 
 /**
+ * Поиск терминального factual search call в `response.output`.
+ *
+ * @param {Array<any>} responseOutput Output items из Responses API.
+ * @returns {string | undefined} ID последнего `action.type === "search"`.
+ */
+function findTerminalSearchCallId(responseOutput) {
+  let terminalSearchCallId;
+
+  for (const item of responseOutput) {
+    if (item?.type === "web_search_call" && item?.action?.type === "search" && item.id) {
+      terminalSearchCallId = item.id;
+    }
+  }
+
+  return terminalSearchCallId;
+}
+
+/**
  * Обновление assistant message по полному response.completed.
  *
  * @param {any} output Partial/final assistant message.
@@ -281,29 +299,19 @@ function mapStopReason(status) {
  * @param {any} stream Stream assistant events.
  * @returns {void}
  */
-function enrichOutputFromCompletedResponse(output, response, state, stream) {
+export function enrichOutputFromCompletedResponse(output, response, state, stream) {
   const responseOutput = Array.isArray(response?.output) ? response.output : [];
+  const terminalSearchCallId = findTerminalSearchCallId(responseOutput);
   const annotationSources = dedupeSources(
     responseOutput
       .filter((item) => item?.type === "message")
       .flatMap((item) => extractAnnotationSources(item)),
-  );
-  const inlineTextSources = dedupeSources(
-    responseOutput
-      .filter((item) => item?.type === "message")
-      .flatMap((item) => {
-        const content = Array.isArray(item?.content) ? item.content : [];
-        return content
-          .filter((part) => part?.type === "output_text" && typeof part.text === "string")
-          .flatMap((part) => extractInlineSourcesFromText(part.text));
-      }),
   );
   const allSources = dedupeSources(
     responseOutput
       .filter((item) => item?.type === "web_search_call")
       .flatMap((item) => extractActionSources(item.action)),
   );
-  const fallbackSources = dedupeSources([...inlineTextSources, ...allSources]);
 
   for (const item of responseOutput) {
     if (item?.type === "web_search_call") {
@@ -329,11 +337,10 @@ function enrichOutputFromCompletedResponse(output, response, state, stream) {
         }
       }
 
-      const resultSources = resolveWebSearchResultSources(
-        extractActionSources(item.action),
-        annotationSources,
-        fallbackSources,
-      );
+      const perCallSources = extractActionSources(item.action);
+      const resultSources = item.id === terminalSearchCallId
+        ? resolveWebSearchResultSources(allSources, annotationSources)
+        : resolveWebSearchResultSources(perCallSources, []);
       const resultContent = buildWebSearchResultContent(resultSources);
       const resultBlockIndex = state.searchResultBlockById.get(item.id);
       if (resultBlockIndex == null) {

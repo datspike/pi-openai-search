@@ -66,6 +66,32 @@ async function loadTestableExtensionModule(tempDir, { fsPromisesLines, nativeSea
   return import(pathToFileURL(transformedModulePath).href);
 }
 
+async function loadTestableDisplayPatchModule(tempDir) {
+  const sourcePath = fileURLToPath(new URL("../src/openai-responses-display-patch.js", import.meta.url));
+  const searchDisplayPath = fileURLToPath(new URL("../src/openai-search-display.js", import.meta.url));
+  const mockPiAiPath = path.join(tempDir, "pi-ai-mock.js");
+  const transformedModulePath = path.join(tempDir, "openai-responses-display-patch.testable.mjs");
+
+  fs.writeFileSync(
+    mockPiAiPath,
+    [
+      "export class AssistantMessageEventStream {}",
+      'export function getEnvApiKey() { return ""; }',
+      "export function registerApiProvider() {}",
+      "export function supportsXhigh() { return false; }",
+    ].join("\n"),
+    "utf8",
+  );
+
+  const originalSource = fs.readFileSync(sourcePath, "utf8");
+  const transformedSource = originalSource
+    .replace('"@gsd/pi-ai"', JSON.stringify(pathToFileURL(mockPiAiPath).href))
+    .replace('"./openai-search-display.js"', JSON.stringify(pathToFileURL(searchDisplayPath).href));
+
+  fs.writeFileSync(transformedModulePath, transformedSource, "utf8");
+  return import(pathToFileURL(transformedModulePath).href);
+}
+
 test("isOpenAIResponsesModel detects supported transports", () => {
   assert.equal(isOpenAIResponsesModel({ api: "openai-responses" }), true);
   assert.equal(isOpenAIResponsesModel({ api: "openai-codex-responses" }), true);
@@ -233,35 +259,45 @@ test("appendStructuredCitations appends only missing URLs", () => {
   assert.equal(preserved, next);
 });
 
-test("resolveWebSearchResultSources falls back to annotations when action sources are empty", () => {
-  const result = resolveWebSearchResultSources(
-    [],
-    [{ title: "OpenAI blog", url: "https://openai.com/index/openai-acquires-tbpn" }],
-    [{ title: "Fallback", url: "https://example.com/fallback" }],
-  );
-
-  assert.deepEqual(result, [
-    { title: "OpenAI blog", url: "https://openai.com/index/openai-acquires-tbpn" },
-  ]);
-  assert.deepEqual(buildWebSearchResultContent(result), [
-    {
-      type: "web_search_result",
-      title: "OpenAI blog",
-      url: "https://openai.com/index/openai-acquires-tbpn",
-    },
-  ]);
-});
-
-test("resolveWebSearchResultSources keeps action sources ahead of annotation fallback", () => {
+test("resolveWebSearchResultSources merges structured action and annotation sources only", () => {
   const result = resolveWebSearchResultSources(
     [{ title: "Action source", url: "https://example.com/action" }],
-    [{ title: "Annotation source", url: "https://example.com/annotation" }],
+    [
+      { title: "Annotation source", url: "https://example.com/annotation" },
+      { title: "Action duplicate", url: "https://example.com/action" },
+    ],
     [{ title: "Fallback source", url: "https://example.com/fallback" }],
   );
 
   assert.deepEqual(result, [
     { title: "Action source", url: "https://example.com/action" },
+    { title: "Annotation source", url: "https://example.com/annotation" },
   ]);
+  assert.deepEqual(buildWebSearchResultContent(result), [
+    {
+      type: "web_search_result",
+      title: "Action source",
+      url: "https://example.com/action",
+    },
+    {
+      type: "web_search_result",
+      title: "Annotation source",
+      url: "https://example.com/annotation",
+    },
+  ]);
+});
+
+test("resolveWebSearchResultSources ignores synthetic fallback when structured inputs are absent", () => {
+  const result = resolveWebSearchResultSources(
+    [],
+    [],
+    [{ title: "Fallback source", url: "https://example.com/fallback" }],
+  );
+
+  assert.deepEqual(result, []);
+  assert.deepEqual(buildWebSearchResultContent(result), {
+    type: "web_search_tool_result_complete",
+  });
 });
 
 test("extractInlineSourcesFromText extracts markdown links before plain URLs", () => {
@@ -279,6 +315,9 @@ test("extractInlineSourcesFromText extracts markdown links before plain URLs", (
       url: "https://openai.com/index/openai-acquires-tbpn",
     },
   ]);
+
+  const webSearchResultSources = resolveWebSearchResultSources([], [], result);
+  assert.deepEqual(webSearchResultSources, []);
 });
 
 test("truthful web search labels use only factual args", () => {
@@ -858,6 +897,167 @@ test("debug snapshot write failures do not escape extension handlers", async () 
   } finally {
     delete process.env.PI_OPENAI_NATIVE_SEARCH_DEBUG_FILE;
     delete process.env.PI_OPENAI_NATIVE_SEARCH_DEBUG_MESSAGE_FILE;
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("enrichOutputFromCompletedResponse keeps per-call truthfulness and backfills terminal search only", async () => {
+  const tempDir = fs.mkdtempSync(path.join(process.cwd(), ".tmp-pi-openai-search-enrich-test-"));
+
+  try {
+    const patchModule = await loadTestableDisplayPatchModule(tempDir);
+    const streamEvents = [];
+    const stream = {
+      push(event) {
+        streamEvents.push(event);
+      },
+    };
+    const output = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "Итоговый ответ с inline URL https://inline.example.com/ghost",
+        },
+      ],
+    };
+    const state = {
+      messageBlockByItemId: new Map([["msg_1", 0]]),
+      searchCallIds: new Set(),
+      searchToolBlockById: new Map(),
+      searchResultBlockById: new Map(),
+    };
+
+    patchModule.enrichOutputFromCompletedResponse(
+      output,
+      {
+        output: [
+          {
+            type: "web_search_call",
+            id: "search_1",
+            action: {
+              type: "search",
+              query: "openai news april",
+              sources: [{ title: "First source", url: "https://example.com/first" }],
+            },
+          },
+          {
+            type: "web_search_call",
+            id: "open_1",
+            action: {
+              type: "open_page",
+              url: "https://example.com/article",
+            },
+          },
+          {
+            type: "web_search_call",
+            id: "find_1",
+            action: {
+              type: "find_in_page",
+              pattern: "OpenAI",
+            },
+          },
+          {
+            type: "web_search_call",
+            id: "search_2",
+            action: {
+              type: "search",
+              query: "latest openai announcements",
+              sources: [
+                { title: "Second source", url: "https://example.com/second" },
+                { title: "First source duplicate", url: "https://example.com/first" },
+              ],
+            },
+          },
+          {
+            type: "message",
+            id: "msg_1",
+            content: [
+              {
+                type: "output_text",
+                text: "- Raw URL in text only: https://inline.example.com/ghost",
+                annotations: [
+                  {
+                    type: "url_citation",
+                    url_citation: {
+                      title: "Annotation source",
+                      url: "https://example.com/annotated",
+                    },
+                  },
+                  {
+                    type: "url_citation",
+                    url_citation: {
+                      title: "Second source duplicate",
+                      url: "https://example.com/second",
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+      state,
+      stream,
+    );
+
+    const resultByToolUseId = new Map(
+      output.content
+        .filter((block) => block?.type === "webSearchResult")
+        .map((block) => [block.toolUseId, block.content]),
+    );
+
+    assert.deepEqual(resultByToolUseId.get("search_1"), [
+      {
+        type: "web_search_result",
+        title: "First source",
+        url: "https://example.com/first",
+      },
+    ]);
+    assert.deepEqual(resultByToolUseId.get("open_1"), {
+      type: "web_search_tool_result_complete",
+    });
+    assert.deepEqual(resultByToolUseId.get("find_1"), {
+      type: "web_search_tool_result_complete",
+    });
+    assert.deepEqual(resultByToolUseId.get("search_2"), [
+      {
+        type: "web_search_result",
+        title: "First source",
+        url: "https://example.com/first",
+      },
+      {
+        type: "web_search_result",
+        title: "Second source",
+        url: "https://example.com/second",
+      },
+      {
+        type: "web_search_result",
+        title: "Annotation source",
+        url: "https://example.com/annotated",
+      },
+    ]);
+
+    assert.ok(
+      output.content[0].text.includes("https://inline.example.com/ghost"),
+      "inline URL в тексте должен сохраниться только в text block",
+    );
+    assert.ok(
+      output.content[0].text.includes("https://example.com/annotated"),
+      "structured annotation sources should still be appended to text citations",
+    );
+    assert.equal(
+      resultByToolUseId.get("search_2").some((item) => item.url === "https://inline.example.com/ghost"),
+      false,
+    );
+    assert.deepEqual(
+      output.content
+        .filter((block) => block?.type === "serverToolUse")
+        .map((block) => block.id),
+      ["search_1", "open_1", "find_1", "search_2"],
+    );
+    assert.equal(streamEvents.filter((event) => event.type === "web_search_result").length, 4);
+  } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
 });

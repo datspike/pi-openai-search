@@ -207,30 +207,19 @@ export function summarizeSearchInput(action) {
 }
 
 /**
- * Выбор источников для результата web_search в tool-use блоке.
+ * Выбор structured источников для результата web_search в tool-use блоке.
  *
- * Приоритет:
- * 1. `web_search_call.action.sources`
- * 2. annotations из assistant message
- * 3. агрегированный fallback по всему response
+ * Inline-text fallback здесь намеренно запрещён: канонический `webSearchResult`
+ * должен строиться только из factual structured inputs.
  *
  * @param {Array<{title: string, url: string}> | undefined} actionSources Источники из action.sources.
  * @param {Array<{title: string, url: string}> | undefined} annotationSources Источники из annotations.
- * @param {Array<{title: string, url: string}> | undefined} fallbackSources Общий fallback-список.
+ * @param {Array<{title: string, url: string}> | undefined} fallbackSources Legacy-аргумент; synthetic fallback игнорируется.
  * @returns {Array<{title: string, url: string}>} Источники для webSearchResult.
  */
 export function resolveWebSearchResultSources(actionSources, annotationSources, fallbackSources) {
-  const directSources = dedupeSources(actionSources || []);
-  if (directSources.length > 0) {
-    return directSources;
-  }
-
-  const messageSources = dedupeSources(annotationSources || []);
-  if (messageSources.length > 0) {
-    return messageSources;
-  }
-
-  return dedupeSources(fallbackSources || []);
+  void fallbackSources;
+  return dedupeSources([...(actionSources || []), ...(annotationSources || [])]);
 }
 
 /**
