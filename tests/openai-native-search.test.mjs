@@ -27,6 +27,12 @@ import {
   applyTruthfulInteractiveWebSearchPatch,
   registerTruthfulInteractiveWebSearchPatch,
 } from "../src/openai-tool-execution-web-search-patch.js";
+import {
+  classifyRawResponse,
+  classifyVerifierJsonl,
+  parseJsonlEvents,
+  resolveAbsoluteExtensionPath,
+} from "../scripts/openai-search-proof-lib.mjs";
 
 async function loadTestableExtensionModule(tempDir, { fsPromisesLines, nativeSearchLines }) {
   const sourcePath = fileURLToPath(new URL("../index.js", import.meta.url));
@@ -1234,6 +1240,185 @@ test("loadExtensions replaces openai-responses provider in shared pi-ai registry
   } finally {
     piAiModule.resetApiProviders();
   }
+});
+
+test("proof helper parses JSONL and rejects malformed rows", () => {
+  const events = parseJsonlEvents('{"type":"message_start"}\n{"type":"message_end","message":{"role":"assistant","content":[]}}\n');
+  assert.equal(events.length, 2);
+
+  assert.throws(
+    () => parseJsonlEvents('{"type":"message_start"}\nnot-json\n'),
+    /JSONL строку 2/,
+  );
+});
+
+test("proof helper requires existing absolute extension path", () => {
+  assert.equal(resolveAbsoluteExtensionPath("./index.js"), path.resolve("index.js"));
+
+  assert.throws(
+    () => resolveAbsoluteExtensionPath("./missing-index.js"),
+    /Extension path не найден/,
+  );
+});
+
+test("raw proof classification marks scenario A as blocker without structured seams", () => {
+  const result = classifyRawResponse(
+    {
+      output: [
+        {
+          type: "web_search_call",
+          id: "ws_1",
+          action: {
+            type: "search",
+            query: "openai news",
+          },
+          results: [],
+        },
+        {
+          type: "message",
+          id: "msg_1",
+          content: [
+            {
+              type: "output_text",
+              text: "- OpenAI news: https://openai.com/index/openai-acquires-tbpn",
+              annotations: [],
+            },
+          ],
+        },
+      ],
+    },
+    "A",
+  );
+
+  assert.equal(result.verdict, "blocker");
+  assert.match(result.reason, /inline URLs|structured URLs/);
+});
+
+test("raw proof classification passes scenario B only when search stays absent", () => {
+  const passResult = classifyRawResponse(
+    {
+      output: [
+        {
+          type: "message",
+          id: "msg_1",
+          content: [
+            {
+              type: "output_text",
+              text: "Calm acknowledgement",
+              annotations: [],
+            },
+          ],
+        },
+      ],
+    },
+    "B",
+  );
+  assert.equal(passResult.verdict, "pass");
+
+  const failResult = classifyRawResponse(
+    {
+      output: [
+        {
+          type: "web_search_call",
+          id: "ws_1",
+          action: { type: "search", query: "openai news" },
+        },
+        {
+          type: "message",
+          id: "msg_1",
+          content: [{ type: "output_text", text: "Calm acknowledgement", annotations: [] }],
+        },
+      ],
+    },
+    "B",
+  );
+  assert.equal(failResult.verdict, "fail");
+});
+
+test("verifier classification marks sentinel-only scenario A as blocker", () => {
+  const result = classifyVerifierJsonl(
+    parseJsonlEvents(
+      [
+        JSON.stringify({
+          type: "message_update",
+          assistantMessageEvent: {
+            type: "server_tool_use",
+            contentIndex: 0,
+            partial: {
+              role: "assistant",
+              content: [{ type: "serverToolUse", id: "ws_1", name: "web_search", input: { query: "openai news" } }],
+            },
+          },
+        }),
+        JSON.stringify({
+          type: "message_update",
+          assistantMessageEvent: {
+            type: "web_search_result",
+            contentIndex: 0,
+            partial: {
+              role: "assistant",
+              content: [{ type: "webSearchResult", toolUseId: "ws_1", content: { type: "web_search_tool_result_complete" } }],
+            },
+          },
+        }),
+        JSON.stringify({
+          type: "message_end",
+          message: {
+            role: "assistant",
+            content: [
+              { type: "serverToolUse", id: "ws_1", name: "web_search", input: { query: "openai news" } },
+              { type: "webSearchResult", toolUseId: "ws_1", content: { type: "web_search_tool_result_complete" } },
+              { type: "text", text: "Done" },
+            ],
+          },
+        }),
+      ].join("\n"),
+    ),
+    "A",
+  );
+
+  assert.equal(result.verdict, "blocker");
+  assert.match(result.reason, /sentinel/);
+});
+
+test("verifier classification keeps scenario B clean and rejects garbage URLs", () => {
+  const passResult = classifyVerifierJsonl(
+    parseJsonlEvents(
+      [
+        JSON.stringify({
+          type: "message_end",
+          message: {
+            role: "assistant",
+            content: [
+              { type: "thinking", thinking: "" },
+              { type: "text", text: "Calm acknowledgement" },
+            ],
+          },
+        }),
+      ].join("\n"),
+    ),
+    "B",
+  );
+  assert.equal(passResult.verdict, "pass");
+
+  const failResult = classifyVerifierJsonl(
+    parseJsonlEvents(
+      [
+        JSON.stringify({
+          type: "message_end",
+          message: {
+            role: "assistant",
+            content: [
+              { type: "text", text: "Garbage https://www placeholder" },
+            ],
+          },
+        }),
+      ].join("\n"),
+    ),
+    "B",
+  );
+  assert.equal(failResult.verdict, "fail");
+  assert.match(failResult.reason, /мусорный URL|garbage URL/);
 });
 
 test(

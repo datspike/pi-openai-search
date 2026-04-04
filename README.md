@@ -1,6 +1,6 @@
 # pi-openai-search
 
-POC extension для `gsd` / `pi`, который включает нативный `web_search` tool у OpenAI Responses API.
+POC extension для `gsd` / `pi`, который включает нативный `web_search` tool у OpenAI Responses API и старается сохранить truthful UX без synthetic fallback.
 
 Это не Brave, не Tavily и не отдельный поисковый tool. Extension делает то же базовое действие, что и Codex CLI:
 
@@ -14,9 +14,7 @@ POC extension для `gsd` / `pi`, который включает нативн�
 
 ## Для твоего случая
 
-Судя по `cli-proxy-api/README.md`, у тебя `gsd` использует встроенный provider `openai` с override `baseUrl` на локальный proxy и transport `openai-responses`.
-
-Значит этот extension должен попадать ровно в нужную точку.
+Если `gsd` использует встроенный provider `openai` с override `baseUrl` на proxy и transport `openai-responses`, extension попадает ровно в нужную точку.
 
 ## Что делает
 
@@ -26,26 +24,26 @@ POC extension для `gsd` / `pi`, который включает нативн�
   - `search-the-web`
   - `search_and_read`
   - `google_search`
-- добавляет `include: ["web_search_call.action.sources"]`
+- добавляет `include: ["web_search_call.action.sources", "web_search_call.results"]`
 - выставляет `tool_choice = "auto"`, если поле не задано
 - выставляет `parallel_tool_calls = true`, если поле не задано
 - поддерживает live/cached режим и базовые фильтры через env
 - патчит provider `openai-responses` через `registerApiProvider()` так, чтобы финальный assistant message содержал:
   - `serverToolUse` для `web_search_call`
   - `webSearchResult` для завершённого native search
-  - добавленные в текст citations, если OpenAI вернул структурированные источники, которых ещё нет в тексте
+  - добавленные в текст citations, если OpenAI вернул structured annotations, которых ещё нет в тексте
 
 ## Ограничения POC
 
 Сейчас UX-патч добавлен только для transport `openai-responses`.
 
-То есть для твоего основного кейса с proxy-backed `openai/gpt-5.4` это уже покрыто, но:
+То есть для основного кейса с proxy-backed `openai/gpt-5.4` это покрыто, но:
 
 - `openai-codex-responses` пока без аналогичного display patch,
 - `azure-openai-responses` пока без аналогичного display patch,
-- если upstream не вернёт структурированные annotations/sources, extension не выдумает их сам — в таком случае остаются только ссылки, которые модель явно написала в тексте.
+- если upstream не вернёт structured `action.sources`, `results` или annotations, extension не выдумает их сам.
 
-То есть это уже не только payload injection, а рабочий runtime patch для твоего основного OpenAI Responses сценария, но ещё не полный upstream-quality клон UX Codex.
+То есть это уже не только payload injection, а рабочий runtime patch для основного OpenAI Responses сценария, но ещё не полный upstream-quality клон UX Codex.
 
 ## Быстрый запуск
 
@@ -53,12 +51,14 @@ POC extension для `gsd` / `pi`, который включает нативн�
 gsd --extension ~/hobby/pi-openai-search
 ```
 
-Если нужно проверить разово:
+Разовая live-проверка:
 
 ```bash
+PI_OPENAI_NATIVE_SEARCH=1 \
 PI_OPENAI_NATIVE_SEARCH_MODE=live \
   gsd --extension ~/hobby/pi-openai-search --mode text --print --no-session \
-  --model gpt-5.4 'Найди свежие заметки про OpenAI Responses API web_search и кратко перескажи с источниками.'
+  --model openai/gpt-5.4 \
+  'Найди свежие заметки про OpenAI Responses API web_search и кратко перескажи с источниками.'
 ```
 
 ## Env-конфиг
@@ -110,8 +110,6 @@ PI_OPENAI_NATIVE_SEARCH_MODE=live \
 }
 ```
 
-После этого `gsd` будет загружать extension без `--extension`.
-
 ### Альтернатива: через global extensions dir
 
 Можно положить symlink в `~/.gsd/agent/extensions/`, и тогда `gsd` подхватит package автоматически:
@@ -119,8 +117,6 @@ PI_OPENAI_NATIVE_SEARCH_MODE=live \
 ```bash
 ln -s ~/hobby/pi-openai-search ~/.gsd/agent/extensions/pi-openai-search
 ```
-
-Этот вариант хорош, если хочешь полностью жить в стандартной директории extension-ов `gsd/pi`.
 
 ## Примеры
 
@@ -152,64 +148,177 @@ Proxy должен:
 ## Локальная проверка
 
 ```bash
-cd ~/hobby/pi-openai-search
 npm test
 ```
 
-## Regression proof (S02)
+## Repeatable proof (S03)
 
-### Scenario A — live search JSONL proof
+### Почему proof теперь двухступенчатый
 
-Для локального repo запуска:
+Scenario A нельзя честно закрывать одной только CLI-командой. Проверка должна ответить на два разных вопроса:
+
+1. Есть ли structured URLs уже в raw Responses payload до CLI/runtime mapping?
+2. Сохраняет ли exact `gsd --mode json --print --no-session` harness truthful blocks и не ломается ли на `spawnSync(..., { maxBuffer: 1024 * 1024 })`?
+
+Для этого в репозитории есть два script entrypoint:
+
+- `scripts/openai-search-raw-probe.mjs`
+- `scripts/verify-openai-search-proof.mjs`
+
+Оба используют одни и те же scenario prompts:
+
+- **Scenario A** — `Search the web for the latest OpenAI news today. Return exactly two bullet points with two distinct source links.`
+- **Scenario B** — `Reply with exactly two words: calm acknowledgement.`
+
+### Абсолютный path к extension обязателен
+
+В auto-mode worktree нельзя полагаться на `--extension .` или `--extension ./index.js`: они могут резолвиться к каноническому repo cwd, а не к текущему checkout внутри `.gsd/worktrees/...`.
+
+Авторитетный вариант:
+
+```bash
+EXTENSION_PATH="$PWD/index.js"
+```
+
+Если `PWD` не указывает на нужный checkout, подставь полный абсолютный путь к `index.js` конкретного worktree.
+
+### 1. Raw Responses probe
+
+Показывает, есть ли structured URLs уже в upstream payload через `web_search_call.action.sources`, `web_search_call.results` или message annotations.
+
+```bash
+node scripts/openai-search-raw-probe.mjs \
+  --extension "$PWD/index.js" \
+  --scenario A \
+  --scenario B
+```
+
+Что смотреть в выводе:
+
+- `overallVerdict`
+- для scenario A:
+  - `searchCalls[*].actionSourceCount`
+  - `searchCalls[*].resultSourceCount`
+  - `annotationSourceCount`
+  - `inlineSourceCount`
+  - `verdict: pass | blocker | fail`
+- для scenario B:
+  - должен быть `pass` с нулевым search activity
+
+### 2. Exact no-session verifier harness
+
+Запускает тот же CLI contract, который важен для slice validation: `spawnSync('sh', ['-lc', cmd], { maxBuffer: 1024 * 1024 })`.
+
+```bash
+node scripts/verify-openai-search-proof.mjs \
+  --extension "$PWD/index.js" \
+  --scenario A \
+  --scenario B
+```
+
+Что смотреть в выводе:
+
+- `overallVerdict`
+- для каждого сценария:
+  - `summary.command`
+  - `summary.stdoutBytes`
+  - `summary.durationMs`
+  - `summary.finalServerToolUseIds`
+  - `summary.finalWebSearchResultIds`
+  - `summary.resultBlocks`
+  - `verdict: pass | blocker | fail`
+
+### Pass / blocker / fail contract
+
+#### `pass`
+
+Оба script запускаются без operational errors, а затем:
+
+- raw probe показывает хотя бы один truthful structured seam для scenario A:
+  - `action.sources`, или
+  - `results`, или
+  - `annotations`
+- verifier harness проходит exact 1 MiB contract без `ENOBUFS`
+- scenario A содержит финальные factual `serverToolUse` / `webSearchResult` blocks с сохранённым `toolUseId` separation
+- scenario B остаётся полностью чистым:
+  - zero `serverToolUse`
+  - zero `webSearchResult`
+  - zero garbage URLs вроде `https://www`
+
+#### `blocker`
+
+Scripts отработали штатно, но truthful closure для scenario A отсутствует на upstream seam.
+
+Типичные blocker signatures:
+
+- raw probe вернул `verdict: blocker` и показал, что structured URLs отсутствуют уже в raw payload
+- verifier закончил scenario A только sentinel `web_search_tool_result_complete` без structured URLs
+- scenario B остаётся чистым, то есть локальный negative path не сломан
+
+**Дальнейшее действие:** идти в validation/remediation milestone, а не в ещё один source-mapper refactor.
+
+#### `fail`
+
+Proof нельзя считать достоверным, потому что упал сам harness или нарушен локальный contract.
+
+Типичные fail signatures:
+
+- `ENOBUFS` / timeout / wrong `--extension` path
+- malformed JSONL
+- отсутствует финальный `message_end`
+- scenario B внезапно генерирует search artifacts
+- в scenario A теряется `toolUseId` separation
+- появляются garbage URLs вроде `https://www`
+
+**Дальнейшее действие:** чинить локальный proof harness, а не классифицировать upstream.
+
+## tmux / human-attended UAT checklist
+
+Interactive proof по-прежнему нужен как человеко-проверяемый слой поверх raw + no-session.
+
+### tmux runbook
+
+1. Открой новую tmux pane в нужном worktree.
+2. Запусти interactive CLI с абсолютным extension path:
 
 ```bash
 PI_OPENAI_NATIVE_SEARCH=1 \
 PI_OPENAI_NATIVE_SEARCH_MODE=live \
-gsd --extension . --mode json --print --no-session --model openai/gpt-5.4 \
-  'Search the web for the latest OpenAI news today. Return exactly two bullet points with two distinct source links.'
+  gsd --extension "$PWD/index.js" --model openai/gpt-5.4
 ```
 
-Для auto-mode worktree используй абсолютный путь к текущему checkout, иначе `--extension .` может резолвиться к каноническому repo cwd:
+3. Введи **Scenario A** prompt.
+4. Проверь:
+   - search steps отображаются factual blocks, а не synthetic prompt echo
+   - финальный search result не содержит мусорных URL
+   - если источников нет, это выглядит как honest blocker, а не скрытый fallback
+5. Введи **Scenario B** prompt.
+6. Проверь:
+   - нет search blocks
+   - нет garbage URLs
+7. Зафиксируй результат как один из трёх исходов: `pass`, `blocker`, `fail`.
 
-```bash
-PI_OPENAI_NATIVE_SEARCH=1 \
-PI_OPENAI_NATIVE_SEARCH_MODE=live \
-gsd --extension /absolute/path/to/worktree/index.js --mode json --print --no-session --model openai/gpt-5.4 \
-  'Search the web for the latest OpenAI news today. Return exactly two bullet points with two distinct source links.'
-```
+### Ограничение auto-mode
 
-#### Pass criteria
+В auto-mode нет human-attended tmux confirmation. В этом режиме обязательный минимум такой:
 
-- stdout JSONL проходит через verifier harness `spawnSync('sh', ['-lc', cmd], { maxBuffer: 1024 * 1024 })` без `ENOBUFS`
-- в `message_end.message.content` есть factual `serverToolUse` / `webSearchResult` blocks
-- если upstream вернул structured `action.sources` или annotations, terminal `search` block содержит deduped source set только из этих structured данных
+- прогнать raw probe
+- прогнать exact verifier harness
+- явно записать в task summary, что tmux/UAT не выполнялся человеком
+- всё равно выбрать `pass` или `blocker`, если raw/verifier proof уже честно локализует состояние
 
-#### Current upstream failure signature
-
-На состоянии апреля 2026 local mapper больше не переполняет 1 MiB buffer, но live OpenAI Responses нередко возвращает `web_search_call` без structured `action.sources/results`, а `output_text.annotations` остаётся пустым. В этом режиме terminal `webSearchResult` честно деградирует к sentinel `web_search_tool_result_complete`. Это provider-contract blocker, а не возврат к synthetic fallback.
-
-### Scenario B — live non-search negative proof
-
-```bash
-PI_OPENAI_NATIVE_SEARCH=1 \
-PI_OPENAI_NATIVE_SEARCH_MODE=live \
-gsd --extension . --mode json --print --no-session --model openai/gpt-5.4 \
-  'Reply with exactly two words: calm acknowledgement.'
-```
-
-#### Pass criteria
-
-- финальный assistant message содержит только `text` block
-- нет `serverToolUse` и `webSearchResult`
-- нет мусорных URL вроде `https://www`
-
-### Useful diagnostics
+## Useful diagnostics
 
 - `PI_OPENAI_NATIVE_SEARCH_DEBUG_FILE=/tmp/pi-openai-search.json` — снимок финального provider payload (`tools`, `include`, `tool_choice`, `parallel_tool_calls`)
 - `PI_OPENAI_NATIVE_SEARCH_DEBUG_MESSAGE_FILE=/tmp/pi-openai-search-message.json` — снимок финального assistant message, если runtime действительно эмитит `message_end`
+- `node --test tests/openai-native-search.test.mjs` — deterministic regression harness для mapper и proof helpers
 
 ## Файлы
 
-- `index.js` - регистрация hook-ов extension
-- `src/openai-native-search.js` - чистая логика инъекции
-- `tests/openai-native-search.test.mjs` - smoke tests для payload mutation
+- `index.js` — регистрация hook-ов extension
+- `src/openai-native-search.js` — логика payload injection
+- `src/openai-search-display.js` — shared helpers для truthful source/result rendering
+- `src/openai-responses-display-patch.js` — patched provider `openai-responses`
+- `scripts/openai-search-raw-probe.mjs` — raw Responses seam classifier
+- `scripts/verify-openai-search-proof.mjs` — exact CLI verifier harness
+- `tests/openai-native-search.test.mjs` — regression tests
