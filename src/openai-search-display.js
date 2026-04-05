@@ -216,11 +216,19 @@ export function summarizeSearchInput(action) {
 
   const summary = { type: action.type || "search" };
 
-  if (action.query) {
-    summary.query = action.query;
+  const directQuery = typeof action.query === "string" ? action.query : undefined;
+  const searchQuery = typeof action.search_query === "string" ? action.search_query : undefined;
+  const queryText = typeof action.query_text === "string" ? action.query_text : undefined;
+  const inputText = typeof action.input === "string" ? action.input : undefined;
+  const promptText = typeof action.prompt === "string" ? action.prompt : undefined;
+
+  if (directQuery || searchQuery || queryText || inputText || promptText) {
+    summary.query = directQuery || searchQuery || queryText || inputText || promptText;
   }
   if (Array.isArray(action.queries) && action.queries.length > 0) {
     summary.queries = action.queries;
+  } else if (Array.isArray(action.search_queries) && action.search_queries.length > 0) {
+    summary.queries = action.search_queries;
   }
   if (action.url) {
     summary.url = action.url;

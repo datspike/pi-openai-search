@@ -22,6 +22,7 @@ import {
   formatTruthfulWebSearchPendingLabel,
   getFactualSearchLifecycleUpdate,
   resolveWebSearchResultSources,
+  summarizeSearchInput,
 } from "../src/openai-search-display.js";
 import {
   applyTruthfulInteractiveWebSearchPatch,
@@ -397,6 +398,32 @@ test("truthful web search labels use only factual args", () => {
   assert.equal(formatTruthfulWebSearchPendingLabel({ pattern: "tbpn" }), "Searching the web: find tbpn");
   assert.equal(formatTruthfulWebSearchPendingLabel({}), "Searching the web");
   assert.equal(formatTruthfulWebSearchDoneLabel({}), "Searched the web");
+});
+
+test("summarizeSearchInput reads defensive provider query variants", () => {
+  assert.deepEqual(
+    summarizeSearchInput({
+      type: "search",
+      search_query: "openai news today",
+      search_queries: ["openai news today", "openai blog"],
+    }),
+    {
+      type: "search",
+      query: "openai news today",
+      queries: ["openai news today", "openai blog"],
+    },
+  );
+
+  assert.deepEqual(
+    summarizeSearchInput({
+      type: "search",
+      query_text: "latest openai announcements",
+    }),
+    {
+      type: "search",
+      query: "latest openai announcements",
+    },
+  );
 });
 
 test("applyTruthfulInteractiveWebSearchPatch rejects incompatible runtime shape", () => {
