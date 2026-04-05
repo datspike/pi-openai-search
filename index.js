@@ -7,7 +7,10 @@ import {
   loadNativeSearchConfig,
 } from "./src/openai-native-search.js";
 import { getFactualSearchLifecycleUpdate } from "./src/openai-search-display.js";
-import { registerOpenAIResponsesDisplayPatch } from "./src/openai-responses-display-patch.js";
+import {
+  buildPatchedOpenAIResponsesProviderConfig,
+  registerOpenAIResponsesDisplayPatch,
+} from "./src/openai-responses-display-patch.js";
 import { registerTruthfulInteractiveWebSearchPatch } from "./src/openai-tool-execution-web-search-patch.js";
 
 await registerTruthfulInteractiveWebSearchPatch();
@@ -140,6 +143,10 @@ function getLastActiveSearch(activeSearches) {
  */
 export default function registerOpenAISearchExtension(pi) {
   registerOpenAIResponsesDisplayPatch();
+
+  if (typeof pi.registerProvider === "function") {
+    pi.registerProvider("openai", buildPatchedOpenAIResponsesProviderConfig());
+  }
 
   let lastStatusKey;
   let nativeReadyStatus;

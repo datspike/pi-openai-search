@@ -855,6 +855,23 @@ export const streamSimplePatchedOpenAIResponses = (model, context, options) => {
 };
 
 /**
+ * Конфиг provider registration для session-safe extension pipeline.
+ *
+ * `pi.registerProvider()` умеет подменять handler только для моделей
+ * конкретного provider name и не ломает остальные `openai-responses`-потребители.
+ * Это важно для interactive mode, где direct global override может расходиться
+ * с тем provider path, который использует текущая session.
+ *
+ * @returns {{api: string, streamSimple: Function}} Конфиг для `pi.registerProvider()`.
+ */
+export function buildPatchedOpenAIResponsesProviderConfig() {
+  return {
+    api: "openai-responses",
+    streamSimple: streamSimplePatchedOpenAIResponses,
+  };
+}
+
+/**
  * Регистрация patched provider поверх встроенного openai-responses.
  *
  * @returns {void}

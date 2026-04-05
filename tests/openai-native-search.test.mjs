@@ -51,7 +51,12 @@ async function loadTestableExtensionModule(tempDir, { fsPromisesLines, nativeSea
   fs.writeFileSync(mockNativeSearchPath, nativeSearchLines.join("\n"), "utf8");
   fs.writeFileSync(
     mockDisplayPatchPath,
-    ['export function registerOpenAIResponsesDisplayPatch() {}'].join("\n"),
+    [
+      'export function registerOpenAIResponsesDisplayPatch() {}',
+      'export function buildPatchedOpenAIResponsesProviderConfig() {',
+      '  return { api: "openai-responses", streamSimple() {}, marker: "session-safe" };',
+      '}',
+    ].join("\n"),
     "utf8",
   );
   fs.writeFileSync(
@@ -596,6 +601,40 @@ test("getFactualSearchLifecycleUpdate ignores malformed and non-factual inputs",
     }),
     null,
   );
+});
+
+test("extension registers session-safe openai provider override", async () => {
+  const tempDir = fs.mkdtempSync(path.join(process.cwd(), ".tmp-pi-openai-search-provider-test-"));
+
+  try {
+    const extensionModule = await loadTestableExtensionModule(tempDir, {
+      fsPromisesLines: [
+        'export async function mkdir() {}',
+        'export async function writeFile() {}',
+      ],
+      nativeSearchLines: [
+        'export function injectNativeWebSearch(payload) { return payload; }',
+        'export function isOpenAIResponsesModel() { return true; }',
+        'export function loadNativeSearchConfig() { return { enabled: true, mode: "live" }; }',
+      ],
+    });
+
+    const providerRegistrations = [];
+    extensionModule.default({
+      on() {},
+      registerProvider(name, config) {
+        providerRegistrations.push({ name, config });
+      },
+    });
+
+    assert.equal(providerRegistrations.length, 1);
+    assert.equal(providerRegistrations[0].name, "openai");
+    assert.equal(providerRegistrations[0].config.api, "openai-responses");
+    assert.equal(providerRegistrations[0].config.marker, "session-safe");
+    assert.equal(typeof providerRegistrations[0].config.streamSimple, "function");
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
 });
 
 test("extension updates TUI status for native web search lifecycle", async () => {
