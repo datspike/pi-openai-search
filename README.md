@@ -1,40 +1,60 @@
 # pi-openai-search
 
-POC extension только для standalone `pi`, который включает нативный `web_search` tool у OpenAI Responses API и сохраняет truthful UX без synthetic fallback.
+Extension для standalone `pi`, который включает native OpenAI `web_search` в supported path `provider=openai` + `api=openai-responses` и держит truthful UX без synthetic fallback.
 
-## Что делает
+## Supported scope
 
-- включает native OpenAI web search только для Responses API;
-- не трогает `openai-completions`;
-- убирает из model-visible payload конкурирующие search tools;
-- добавляет `include: ["web_search_call.action.sources"]`;
-- выставляет `tool_choice = "auto"` и `parallel_tool_calls = true`, если поле не задано;
-- регистрирует patched provider для `openai-responses`;
-- проецирует реальные `web_search_call` события в `serverToolUse` и `webSearchResult`;
-- добавляет citations в текст только из реальных structured sources;
-- патчит interactive/replay renderer standalone `pi` через fail-open compat-слой.
+Поддерживается только один path:
 
-## Supported path
-
-Поддерживается один runtime path:
 - standalone `pi`
 - `provider=openai`
 - `api=openai-responses`
 
-Репозиторий не поддерживает `gsd`, synthetic citations, synthetic query labels и productized fallback modes.
+Намеренно не поддерживается:
+
+- `openai-completions`
+- другие providers и transports
+- synthetic citations
+- synthetic query labels
+- synthetic `webSearchResult`
+- обязательный custom provider override для default path
 
 ## Архитектура
 
-- `src/pi-runtime.js` - `pi-only` discovery/import helpers
-- `src/openai-native-search.js` - payload injection
-- `src/openai-search-display.js` - truthful format/source helpers
-- `src/openai-responses-params.js` - payload/reasoning/include builder
-- `src/openai-responses-client.js` - OpenAI client creation и response helpers
-- `src/openai-responses-search-mapper.js` - truthful search mapping
-- `src/openai-responses-stream.js` - stream lifecycle orchestration
-- `src/openai-responses-provider.js` - provider registration
-- `src/openai-interactive-search-order-patch.js` - interactive inline compat patch
-- `src/openai-tool-execution-web-search-patch.js` - truthful `web_search` renderer
+Проект разделён на два слоя:
+
+- `core` - stable, supported, public-hook-based логика в `src/core/`
+- `experimental compat` - optional runtime/UI glue в `src/compat/`
+
+Default entrypoint `index.js` работает в режиме `core-first`:
+
+- регистрирует только публичные extension hooks `model_select`, `before_provider_request`, `message_update`, `message_end`
+- не требует provider override в stable core path
+- eagerly подключает experimental compat overlays в fail-open режиме
+- деградирует без hard failure при несовместимом runtime
+
+Подробности:
+
+- архитектурный контракт: [docs/architecture.md](./docs/architecture.md)
+- migration story и deprecation window: [docs/migration.md](./docs/migration.md)
+- машинно-читаемый contract map: [src/core/contracts/architecture.js](./src/core/contracts/architecture.js)
+
+## Что делает `core`
+
+- включает native OpenAI `web_search` только для Responses API
+- удаляет конкурирующие search tools из model-visible payload
+- добавляет `include: ["web_search_call.action.sources"]`
+- выставляет `tool_choice = "auto"` и `parallel_tool_calls = true`, если поле не задано
+- обновляет factual search status только по реально наблюдаемым search events
+- добавляет citations в текст только из реальных source evidence
+
+## Что делает `experimental compat`
+
+- runtime autodiscovery standalone `pi`
+- optional interactive renderer patches
+- optional provider-override helpers, изолированные в `src/compat/provider/`
+- truthful `serverToolUse` / `webSearchResult` blocks через experimental provider compat
+- warnings и fail-open degradation при runtime mismatch
 
 ## Быстрый запуск
 
@@ -52,15 +72,15 @@ PI_OPENAI_NATIVE_SEARCH_MODE=live \
   'Найди свежие заметки про OpenAI Responses API web_search и кратко перескажи с источниками.'
 ```
 
-## Глобальное подключение
+## Подключение
 
-### Через extensions dir
+Через extensions dir:
 
 ```bash
 ln -s ~/hobby/pi-openai-search ~/.pi/agent/extensions/pi-openai-search
 ```
 
-### Через settings.json
+Через `settings.json`:
 
 ```json
 {
@@ -68,56 +88,68 @@ ln -s ~/hobby/pi-openai-search ~/.pi/agent/extensions/pi-openai-search
 }
 ```
 
-## Env-конфиг
+## Env taxonomy
 
-### Основные
+### Stable env
 
 - `PI_OPENAI_NATIVE_SEARCH=true|false`
-  - default: `true`
 - `PI_OPENAI_NATIVE_SEARCH_MODE=live|cached|off`
-  - default: `live`
 - `PI_OPENAI_NATIVE_SEARCH_CONTEXT_SIZE=low|medium|high`
-  - optional
-
-### Доменные фильтры
-
 - `PI_OPENAI_NATIVE_SEARCH_ALLOWED_DOMAINS=example.com,docs.example.com`
-
-### Геолокация
-
 - `PI_OPENAI_NATIVE_SEARCH_COUNTRY=US`
 - `PI_OPENAI_NATIVE_SEARCH_REGION=CA`
 - `PI_OPENAI_NATIVE_SEARCH_CITY=San Francisco`
 - `PI_OPENAI_NATIVE_SEARCH_TIMEZONE=America/Los_Angeles`
+- `PI_OPENAI_NATIVE_SEARCH_DEBUG_FILE=/tmp/pi-openai-search.json`
+- `PI_OPENAI_NATIVE_SEARCH_DEBUG_MESSAGE_FILE=/tmp/pi-openai-search-message.json`
 
-### Runtime / compat
+### Experimental env
 
-- `PI_BIN_PATH=/abs/path/to/pi`
-  - optional
-  - явный путь к standalone `pi` binary для runtime autodiscovery
-- `PI_AGENT_DIR=/abs/path/to/.pi/agent`
-  - optional
-  - нужен proof scripts и live smoke-check, если используется нестандартный agent dir
+- `PI_OPENAI_NATIVE_SEARCH_PROVIDER_COMPAT=true|false`
+  - default: `true`
 - `PI_OPENAI_NATIVE_SEARCH_INTERACTIVE_COMPAT=true|false`
   - default: `true`
 - `PI_OPENAI_NATIVE_SEARCH_TOOL_RENDER_COMPAT=true|false`
   - default: `true`
+- `PI_BIN_PATH=/abs/path/to/pi`
+  - optional standalone runtime discovery override
+- `PI_AGENT_DIR=/abs/path/to/.pi/agent`
+  - optional path for proof/live harness
 
-### Отладка
+## Failure modes
 
-- `PI_OPENAI_NATIVE_SEARCH_DEBUG_FILE=/tmp/pi-openai-search.json`
-- `PI_OPENAI_NATIVE_SEARCH_DEBUG_MESSAGE_FILE=/tmp/pi-openai-search-message.json`
+- compat runtime не найден -> `core` продолжает работать, compat-патчи пропускаются
+- provider compat недоступен -> native search остаётся рабочим, но truthful search blocks могут не появиться
+- runtime shape изменился -> compat деградирует fail-open и отдаёт warning
+- structured sources отсутствуют -> synthetic citations не генерируются, допускается truthful sentinel/result without fabricated sources
+- negative path без search -> search artifacts не добавляются
 
-## Safe degradation
+## Migration
 
-- если compat runtime не найден или upstream shape поменялся, extension не падает на import;
-- если upstream не отдаёт documented structured sources, `webSearchResult` остаётся truthful sentinel без synthetic citations;
-- interactive compat-патчи деградируют fail-open и оставляют payload/provider path рабочим.
+Коротко:
 
-## Локальная проверка
+- canonical stable imports теперь под `src/core/**`
+- canonical experimental imports теперь под `src/compat/**`
+- legacy aliases в `src/*.js` сохранены как thin bridge до `2026-06-30`
+- переименования stable env в этой миграции нет
+
+Подробно: [docs/migration.md](./docs/migration.md)
+
+## Проверка
+
+Полный baseline:
 
 ```bash
 npm test
+```
+
+По контурам:
+
+```bash
+node --test tests/core/*.test.mjs
+node --test tests/compat/*.test.mjs
+node --test tests/contracts/*.test.mjs
+node --test tests/proof/*.test.mjs
 ```
 
 ## Proof scripts
@@ -128,7 +160,7 @@ npm test
 EXTENSION_PATH="$PWD/index.js"
 ```
 
-### 1. Raw Responses probe
+Raw Responses probe:
 
 ```bash
 node scripts/openai-search-raw-probe.mjs \
@@ -137,9 +169,7 @@ node scripts/openai-search-raw-probe.mjs \
   --scenario B
 ```
 
-Проверяет, что raw Responses payload реально выполнил `web_search` и сохранил source evidence: structured seams, opportunistic results или хотя бы inline URLs в `output_text`.
-
-### 2. Exact no-session verifier harness
+Exact no-session verifier harness:
 
 ```bash
 node scripts/verify-openai-search-proof.mjs \
@@ -148,32 +178,30 @@ node scripts/verify-openai-search-proof.mjs \
   --scenario B
 ```
 
-Запускает exact CLI contract через standalone `pi --mode json --print --no-session`.
-
 ## Pass / blocker / fail contract
 
-### `pass`
+`pass`:
 
-- raw probe показывает, что scenario A реально выполнил `web_search` и сохранил source evidence: structured seams, opportunistic results или inline URLs;
-- verifier сохраняет `serverToolUse` / `webSearchResult` и source URLs в финальном `message_end`;
-- если standalone `pi --mode json --print --no-session` не печатает отдельные `server_tool_use` / `web_search_result` в `message_update`, это не считается fail само по себе;
-- scenario B остаётся clean negative path.
+- scenario A реально выполняет `web_search`
+- source evidence сохраняется через structured seams, observed results seam или inline URLs
+- verifier сохраняет truthful `serverToolUse` / `webSearchResult` и source URLs к `message_end`
+- scenario B остаётся clean negative path
 
-### `blocker`
+`blocker`:
 
-- harness работает штатно;
-- scenario A выполнил `web_search`, но до финального ответа не дожили ни structured, ни inline source URLs;
-- negative path остаётся чистым.
+- harness работает
+- scenario A выполняет `web_search`, но до финального ответа не доживают ни structured, ни inline source URLs
+- scenario B остаётся чистым
 
-### `fail`
+`fail`:
 
-- сломан сам harness;
-- malformed JSONL / timeout / wrong extension path;
-- теряется `toolUseId` separation;
-- появляются garbage URLs или search artifacts в scenario B.
+- ломается сам harness
+- malformed JSONL / timeout / wrong extension path
+- теряется `toolUseId` separation
+- появляются garbage URLs или search artifacts в scenario B
 
 ## Useful diagnostics
 
 - `PI_OPENAI_NATIVE_SEARCH_DEBUG_FILE=/tmp/pi-openai-search.json`
 - `PI_OPENAI_NATIVE_SEARCH_DEBUG_MESSAGE_FILE=/tmp/pi-openai-search-message.json`
-- `node --test tests/openai-native-search.test.mjs`
+- `npm run test:legacy`

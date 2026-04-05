@@ -58,30 +58,27 @@ async function loadTestableExtensionModule(
     nativeSearchLines,
     interactiveSearchOrderPatchLines,
     toolExecutionPatchLines,
+    providerCompatLines,
   },
 ) {
   const sourcePath = fileURLToPath(new URL("../index.js", import.meta.url));
+  const coreExtensionPath = fileURLToPath(new URL("../src/core/extension/register-openai-search-extension.js", import.meta.url));
+  const debugSnapshotsPath = fileURLToPath(new URL("../src/core/extension/debug-snapshots.js", import.meta.url));
+  const compatBootstrapPath = fileURLToPath(new URL("../src/compat/bootstrap.js", import.meta.url));
   const searchDisplayPath = fileURLToPath(new URL("../src/openai-search-display.js", import.meta.url));
   const compatPath = fileURLToPath(new URL("../src/pi-runtime.js", import.meta.url));
   const mockFsPromisesPath = path.join(tempDir, "fs-promises-mock.js");
   const mockNativeSearchPath = path.join(tempDir, "openai-native-search-mock.js");
-  const mockDisplayPatchPath = path.join(tempDir, "openai-responses-display-patch-mock.js");
   const mockInteractiveSearchOrderPatchPath = path.join(tempDir, "openai-interactive-search-order-patch-mock.js");
   const mockToolExecutionPatchPath = path.join(tempDir, "openai-tool-execution-web-search-patch-mock.js");
+  const mockProviderCompatPath = path.join(tempDir, "openai-responses-provider-mock.js");
+  const transformedDebugPath = path.join(tempDir, "debug-snapshots.testable.mjs");
+  const transformedCoreExtensionPath = path.join(tempDir, "register-openai-search-extension.testable.mjs");
+  const transformedCompatBootstrapPath = path.join(tempDir, "compat-bootstrap.testable.mjs");
   const transformedModulePath = path.join(tempDir, "index.testable.mjs");
 
   fs.writeFileSync(mockFsPromisesPath, fsPromisesLines.join("\n"), "utf8");
   fs.writeFileSync(mockNativeSearchPath, nativeSearchLines.join("\n"), "utf8");
-  fs.writeFileSync(
-    mockDisplayPatchPath,
-    [
-      'export function registerOpenAIResponsesDisplayPatch() {}',
-      'export function buildPatchedOpenAIResponsesProviderConfig() {',
-      '  return { api: "openai-responses", streamSimple() {}, marker: "session-safe" };',
-      '}',
-    ].join("\n"),
-    "utf8",
-  );
   fs.writeFileSync(
     mockInteractiveSearchOrderPatchPath,
     (
@@ -96,25 +93,48 @@ async function loadTestableExtensionModule(
     ).join("\n"),
     "utf8",
   );
+  fs.writeFileSync(
+    mockProviderCompatPath,
+    (
+      providerCompatLines || [
+        'export function buildPatchedOpenAIResponsesProviderConfig() {',
+        '  return { api: "openai-responses", marker: "experimental-provider-compat", streamSimple() {} };',
+        '}',
+        'export function registerOpenAIResponsesDisplayPatch() {',
+        '  globalThis.__providerCompatFallbackCalls = (globalThis.__providerCompatFallbackCalls || 0) + 1;',
+        '}',
+      ]
+    ).join("\n"),
+    "utf8",
+  );
 
-  const originalSource = fs.readFileSync(sourcePath, "utf8");
-  const transformedSource = originalSource
-    .replace('"node:fs/promises"', JSON.stringify(pathToFileURL(mockFsPromisesPath).href))
-    .replace('"./src/openai-native-search.js"', JSON.stringify(pathToFileURL(mockNativeSearchPath).href))
-    .replace('"./src/openai-search-display.js"', JSON.stringify(pathToFileURL(searchDisplayPath).href))
+  const transformedDebugSource = fs
+    .readFileSync(debugSnapshotsPath, "utf8")
+    .replace('"node:fs/promises"', JSON.stringify(pathToFileURL(mockFsPromisesPath).href));
+  fs.writeFileSync(transformedDebugPath, transformedDebugSource, "utf8");
+
+  const transformedCoreExtensionSource = fs
+    .readFileSync(coreExtensionPath, "utf8")
+    .replace('"../../openai-native-search.js"', JSON.stringify(pathToFileURL(mockNativeSearchPath).href))
+    .replace('"../../openai-search-display.js"', JSON.stringify(pathToFileURL(searchDisplayPath).href))
+    .replace('"./debug-snapshots.js"', JSON.stringify(pathToFileURL(transformedDebugPath).href));
+  fs.writeFileSync(transformedCoreExtensionPath, transformedCoreExtensionSource, "utf8");
+
+  const transformedCompatBootstrapSource = fs
+    .readFileSync(compatBootstrapPath, "utf8")
+    .replace('"./interactive/search-order-patch.js"', JSON.stringify(pathToFileURL(mockInteractiveSearchOrderPatchPath).href))
+    .replace('"./interactive/tool-execution-web-search-patch.js"', JSON.stringify(pathToFileURL(mockToolExecutionPatchPath).href))
+    .replace('"./provider/openai-responses-provider.js"', JSON.stringify(pathToFileURL(mockProviderCompatPath).href))
+    .replace('"./runtime/pi-runtime.js"', JSON.stringify(pathToFileURL(compatPath).href));
+  fs.writeFileSync(transformedCompatBootstrapPath, transformedCompatBootstrapSource, "utf8");
+
+  const transformedSource = fs
+    .readFileSync(sourcePath, "utf8")
     .replace(
-      '"./src/openai-responses-display-patch.js"',
-      JSON.stringify(pathToFileURL(mockDisplayPatchPath).href),
+      '"./src/core/extension/register-openai-search-extension.js"',
+      JSON.stringify(pathToFileURL(transformedCoreExtensionPath).href),
     )
-    .replace(
-      '"./src/openai-interactive-search-order-patch.js"',
-      JSON.stringify(pathToFileURL(mockInteractiveSearchOrderPatchPath).href),
-    )
-    .replace(
-      '"./src/openai-tool-execution-web-search-patch.js"',
-      JSON.stringify(pathToFileURL(mockToolExecutionPatchPath).href),
-    )
-    .replace('"./src/pi-runtime.js"', JSON.stringify(pathToFileURL(compatPath).href));
+    .replace('"./src/compat/bootstrap.js"', JSON.stringify(pathToFileURL(transformedCompatBootstrapPath).href));
 
   fs.writeFileSync(transformedModulePath, transformedSource, "utf8");
   return import(pathToFileURL(transformedModulePath).href);
@@ -127,9 +147,9 @@ async function loadTestableDisplayPatchModule(tempDir) {
 }
 
 async function loadTestableProviderModule(tempDir) {
-  const sourcePath = fileURLToPath(new URL("../src/openai-responses-provider.js", import.meta.url));
-  const streamModulePath = fileURLToPath(new URL("../src/openai-responses-stream.js", import.meta.url));
+  const sourcePath = fileURLToPath(new URL("../src/compat/provider/openai-responses-provider.js", import.meta.url));
   const mockPiAiPath = path.join(tempDir, "pi-ai-mock.js");
+  const mockStreamPath = path.join(tempDir, "openai-responses-stream-mock.js");
   const transformedModulePath = path.join(tempDir, "openai-responses-provider.testable.mjs");
 
   fs.writeFileSync(
@@ -142,26 +162,34 @@ async function loadTestableProviderModule(tempDir) {
     ].join("\n"),
     "utf8",
   );
+  fs.writeFileSync(
+    mockStreamPath,
+    [
+      'export function streamPatchedOpenAIResponses() {}',
+      'export function streamSimplePatchedOpenAIResponses() {}',
+    ].join("\n"),
+    "utf8",
+  );
 
   const transformedSource = fs
     .readFileSync(sourcePath, "utf8")
-    .replace('"./pi-ai-compat.js"', JSON.stringify(pathToFileURL(mockPiAiPath).href))
-    .replace('"./openai-responses-stream.js"', JSON.stringify(pathToFileURL(streamModulePath).href));
+    .replace('"../runtime/pi-ai-compat.js"', JSON.stringify(pathToFileURL(mockPiAiPath).href))
+    .replace('"./openai-responses-stream.js"', JSON.stringify(pathToFileURL(mockStreamPath).href));
 
   fs.writeFileSync(transformedModulePath, transformedSource, "utf8");
   return import(pathToFileURL(transformedModulePath).href);
 }
 
 async function loadTestableInteractiveSearchOrderPatchModule(tempDir) {
-  const sourcePath = fileURLToPath(new URL("../src/openai-interactive-search-order-patch.js", import.meta.url));
+  const sourcePath = fileURLToPath(new URL("../src/compat/interactive/search-order-patch.js", import.meta.url));
   const searchDisplayPath = fileURLToPath(new URL("../src/openai-search-display.js", import.meta.url));
   const compatPath = fileURLToPath(new URL("../src/pi-runtime.js", import.meta.url));
   const transformedModulePath = path.join(tempDir, "openai-interactive-search-order-patch.testable.mjs");
 
   const transformedSource = fs
     .readFileSync(sourcePath, "utf8")
-    .replace('"./openai-search-display.js"', JSON.stringify(pathToFileURL(searchDisplayPath).href))
-    .replace('"./pi-runtime.js"', JSON.stringify(pathToFileURL(compatPath).href));
+    .replace('"../../openai-search-display.js"', JSON.stringify(pathToFileURL(searchDisplayPath).href))
+    .replace('"../runtime/pi-runtime.js"', JSON.stringify(pathToFileURL(compatPath).href));
   fs.writeFileSync(transformedModulePath, transformedSource, "utf8");
   return import(pathToFileURL(transformedModulePath).href);
 }
@@ -1242,7 +1270,7 @@ test("upsertSearchToolUseBlock emits update when web search query arrives on out
   }
 });
 
-test("extension registers session-safe openai provider override", async () => {
+test("extension bootstrap keeps core hooks and enables provider compat overlay by default", async () => {
   const tempDir = fs.mkdtempSync(path.join(process.cwd(), ".tmp-pi-openai-search-provider-test-"));
 
   try {
@@ -1259,29 +1287,38 @@ test("extension registers session-safe openai provider override", async () => {
     });
 
     const providerRegistrations = [];
+    const handlers = new Map();
     extensionModule.default({
-      on() {},
+      on(event, handler) {
+        handlers.set(event, handler);
+      },
       registerProvider(name, config) {
         providerRegistrations.push({ name, config });
       },
     });
 
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
     assert.equal(providerRegistrations.length, 1);
     assert.equal(providerRegistrations[0].name, "openai");
     assert.equal(providerRegistrations[0].config.api, "openai-responses");
-    assert.equal(providerRegistrations[0].config.marker, "session-safe");
-    assert.equal(typeof providerRegistrations[0].config.streamSimple, "function");
+    assert.equal(providerRegistrations[0].config.marker, "experimental-provider-compat");
+    assert.equal(typeof handlers.get("model_select"), "function");
+    assert.equal(typeof handlers.get("before_provider_request"), "function");
+    assert.equal(typeof handlers.get("message_update"), "function");
+    assert.equal(typeof handlers.get("message_end"), "function");
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
 });
 
-test("extension starts ui compat registration during bootstrap", async () => {
+test("extension starts provider and ui compat eagerly on bootstrap", async () => {
   const tempDir = fs.mkdtempSync(path.join(process.cwd(), ".tmp-pi-openai-search-compat-bootstrap-test-"));
 
   try {
     delete globalThis.__interactiveCompatCalls;
     delete globalThis.__toolRenderCompatCalls;
+    delete globalThis.__providerCompatCalls;
 
     const extensionModule = await loadTestableExtensionModule(tempDir, {
       fsPromisesLines: [
@@ -1303,18 +1340,49 @@ test("extension starts ui compat registration during bootstrap", async () => {
         "  globalThis.__toolRenderCompatCalls = (globalThis.__toolRenderCompatCalls || 0) + 1;",
         "}",
       ],
+      providerCompatLines: [
+        "export function buildPatchedOpenAIResponsesProviderConfig() {",
+        "  globalThis.__providerCompatCalls = (globalThis.__providerCompatCalls || 0) + 1;",
+        "  return { api: 'openai-responses', marker: 'experimental-provider-compat', streamSimple() {} };",
+        "}",
+        "export function registerOpenAIResponsesDisplayPatch() {}",
+      ],
     });
 
+    const handlers = new Map();
     extensionModule.default({
-      on() {},
+      on(event, handler) {
+        handlers.set(event, handler);
+      },
       registerProvider() {},
     });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.equal(globalThis.__providerCompatCalls, 1);
+    assert.equal(globalThis.__interactiveCompatCalls, 1);
+    assert.equal(globalThis.__toolRenderCompatCalls, 1);
+
+    await handlers.get("model_select")(
+      {
+        model: { api: "openai-responses", provider: "openai", id: "gpt-5.4" },
+      },
+      {
+        hasUI: true,
+        ui: {
+          notify() {},
+          setStatus() {},
+          setWorkingMessage() {},
+        },
+      },
+    );
 
     assert.equal(globalThis.__interactiveCompatCalls, 1);
     assert.equal(globalThis.__toolRenderCompatCalls, 1);
   } finally {
     delete globalThis.__interactiveCompatCalls;
     delete globalThis.__toolRenderCompatCalls;
+    delete globalThis.__providerCompatCalls;
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
 });
