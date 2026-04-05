@@ -831,6 +831,27 @@ export function formatProofHelp(scriptName) {
 }
 
 /**
+ * Нормализация пути модуля с учётом symlink worktree.
+ *
+ * @param {string | undefined} value Исходный путь.
+ * @returns {string | undefined} Нормализованный путь.
+ */
+function normalizeModulePath(value) {
+  if (!value) {
+    return undefined;
+  }
+
+  const resolved = path.resolve(value);
+  try {
+    return typeof fs.realpathSync.native === "function"
+      ? fs.realpathSync.native(resolved)
+      : fs.realpathSync(resolved);
+  } catch {
+    return resolved;
+  }
+}
+
+/**
  * Проверка, что модуль запущен как entrypoint.
  *
  * @param {string | undefined} argvEntry Значение `process.argv[1]`.
@@ -838,5 +859,5 @@ export function formatProofHelp(scriptName) {
  * @returns {boolean} true, если модуль запущен напрямую.
  */
 export function isMainModule(argvEntry, importMetaUrl) {
-  return Boolean(argvEntry) && path.resolve(argvEntry) === fileURLToPath(importMetaUrl);
+  return normalizeModulePath(argvEntry) === normalizeModulePath(fileURLToPath(importMetaUrl));
 }

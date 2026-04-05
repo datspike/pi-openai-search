@@ -274,18 +274,20 @@ Proof нельзя считать достоверным, потому что у
 
 ### Актуальный blocker baseline (2026-04-05, GMT+3)
 
-Свежий прогон T01 на текущем worktree подтвердил, что локальный runtime уже находится в truthful blocker-ветке и новый mapper churn не нужен, пока upstream не откроет structured seam.
+Свежий финальный прогон S04/T02 на текущем worktree подтвердил, что локальный runtime остаётся в truthful blocker-ветке и новый mapper churn не нужен, пока upstream не откроет structured seam.
 
+- `npm test`
+  - full suite: `pass`
 - `node scripts/openai-search-raw-probe.mjs --extension "$PWD/index.js" --scenario A --scenario B`
   - `overallVerdict: blocker`
   - scenario A: `searchCallCount: 1`, `actionSources: 0`, `resultSources: 0`, `annotationSources: 0`, `inlineSources: 2`
   - scenario B: `pass`, search activity отсутствует
 - `node scripts/verify-openai-search-proof.mjs --extension "$PWD/index.js" --scenario A --scenario B`
   - `overallVerdict: blocker`
-  - scenario A: `serverToolUse/webSearchResult` separation сохранён, `resultBlockCount: 3`, `sentinelCount: 3`, `stdoutBytes: 259419`, `durationMs: 49959`, `garbageUrlDetected: false`
-  - scenario B: `pass`, `stdoutBytes: 5499`, `durationMs: 4261`
+  - scenario A: `serverToolUse/webSearchResult` separation сохранён, `finalServerToolUseCount >= 1`, `finalWebSearchResultCount == finalServerToolUseCount`, `resultBlockCount == sentinelCount`, `garbageUrlDetected: false`
+  - scenario B: `pass`, `finalWebSearchResultCount: 0`, `garbageUrlDetected: false`
 
-Если свежий rerun совпадает с этой сигнатурой, это именно `blocker`, а не локальный `fail`: proof harness работает, negative path чистый, но provider по-прежнему не возвращает structured URLs для scenario A. До появления нового provider-backed seam runtime не расширяем и text-derived canonical sources не возвращаем.
+Если свежий rerun совпадает с этой сигнатурой, это именно `blocker`, а не локальный `fail`: full suite зелёный, proof harness работает, negative path чистый, но provider по-прежнему не возвращает structured URLs для scenario A. До появления нового provider-backed seam runtime не расширяем и text-derived canonical sources не возвращаем.
 
 ## tmux / human-attended UAT checklist
 
@@ -319,8 +321,8 @@ PI_OPENAI_NATIVE_SEARCH_MODE=live \
 
 - прогнать raw probe
 - прогнать exact verifier harness
-- явно записать в task summary, что tmux/UAT не выполнялся человеком
-- всё равно выбрать `pass` или `blocker`, если raw/verifier proof уже честно локализует состояние
+- явно записать в task summary и milestone validation, что tmux/UAT не выполнялся человеком
+- считать scripted `pass/blocker/fail` только доказательством runtime-state; milestone/manual closure остаётся открытым blocker до отдельного human-attended tmux checklist
 
 ## Useful diagnostics
 

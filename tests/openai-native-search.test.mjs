@@ -32,6 +32,7 @@ import {
   classifyVerifierJsonl,
   findAssistantMessageEnd,
   formatProofTimestamp,
+  isMainModule,
   parseJsonlEvents,
   resolveAbsoluteExtensionPath,
   stampScenarioResult,
@@ -1262,6 +1263,24 @@ test("proof helper requires existing absolute extension path", () => {
     () => resolveAbsoluteExtensionPath("./missing-index.js"),
     /Extension path не найден/,
   );
+});
+
+test("proof helper treats symlinked script path as direct entrypoint", () => {
+  const tempDir = fs.mkdtempSync(path.join(process.cwd(), ".tmp-pi-openai-search-main-module-test-"));
+
+  try {
+    const targetPath = path.join(tempDir, "target-script.mjs");
+    const symlinkPath = path.join(tempDir, "linked-script.mjs");
+    const otherPath = path.join(tempDir, "other-script.mjs");
+
+    fs.writeFileSync(targetPath, "export default null;\n", "utf8");
+    fs.symlinkSync(targetPath, symlinkPath);
+
+    assert.equal(isMainModule(symlinkPath, pathToFileURL(targetPath).href), true);
+    assert.equal(isMainModule(otherPath, pathToFileURL(targetPath).href), false);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
 });
 
 test("proof helper stamps scenario result with deterministic ISO timestamp", () => {
