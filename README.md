@@ -243,7 +243,7 @@ node scripts/verify-openai-search-proof.mjs \
 - scenario B остаётся полностью чистым:
   - zero `serverToolUse`
   - zero `webSearchResult`
-  - zero garbage URLs вроде `https://www`
+  - zero standalone garbage placeholders вроде `https://www` (валидные `https://www.<domain>` ссылки допустимы)
 
 #### `blocker`
 
@@ -268,9 +268,24 @@ Proof нельзя считать достоверным, потому что у
 - отсутствует финальный `message_end`
 - scenario B внезапно генерирует search artifacts
 - в scenario A теряется `toolUseId` separation
-- появляются garbage URLs вроде `https://www`
+- появляются standalone garbage placeholders вроде `https://www` (но не валидные `https://www.<domain>` ссылки)
 
 **Дальнейшее действие:** чинить локальный proof harness, а не классифицировать upstream.
+
+### Актуальный blocker baseline (2026-04-05, GMT+3)
+
+Свежий прогон T01 на текущем worktree подтвердил, что локальный runtime уже находится в truthful blocker-ветке и новый mapper churn не нужен, пока upstream не откроет structured seam.
+
+- `node scripts/openai-search-raw-probe.mjs --extension "$PWD/index.js" --scenario A --scenario B`
+  - `overallVerdict: blocker`
+  - scenario A: `searchCallCount: 1`, `actionSources: 0`, `resultSources: 0`, `annotationSources: 0`, `inlineSources: 2`
+  - scenario B: `pass`, search activity отсутствует
+- `node scripts/verify-openai-search-proof.mjs --extension "$PWD/index.js" --scenario A --scenario B`
+  - `overallVerdict: blocker`
+  - scenario A: `serverToolUse/webSearchResult` separation сохранён, `resultBlockCount: 3`, `sentinelCount: 3`, `stdoutBytes: 259419`, `durationMs: 49959`, `garbageUrlDetected: false`
+  - scenario B: `pass`, `stdoutBytes: 5499`, `durationMs: 4261`
+
+Если свежий rerun совпадает с этой сигнатурой, это именно `blocker`, а не локальный `fail`: proof harness работает, negative path чистый, но provider по-прежнему не возвращает structured URLs для scenario A. До появления нового provider-backed seam runtime не расширяем и text-derived canonical sources не возвращаем.
 
 ## tmux / human-attended UAT checklist
 

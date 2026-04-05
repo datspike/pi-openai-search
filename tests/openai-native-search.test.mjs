@@ -30,8 +30,11 @@ import {
 import {
   classifyRawResponse,
   classifyVerifierJsonl,
+  findAssistantMessageEnd,
+  formatProofTimestamp,
   parseJsonlEvents,
   resolveAbsoluteExtensionPath,
+  stampScenarioResult,
 } from "../scripts/openai-search-proof-lib.mjs";
 
 async function loadTestableExtensionModule(tempDir, { fsPromisesLines, nativeSearchLines }) {
@@ -1261,6 +1264,18 @@ test("proof helper requires existing absolute extension path", () => {
   );
 });
 
+test("proof helper stamps scenario result with deterministic ISO timestamp", () => {
+  const observedAt = formatProofTimestamp("2026-04-04T20:06:44.000Z");
+  const result = stampScenarioResult({ scenario: "A", verdict: "blocker" }, observedAt);
+
+  assert.equal(observedAt, "2026-04-04T20:06:44.000Z");
+  assert.deepEqual(result, {
+    scenario: "A",
+    verdict: "blocker",
+    observedAt: "2026-04-04T20:06:44.000Z",
+  });
+});
+
 test("raw proof classification marks scenario A as blocker without structured seams", () => {
   const result = classifyRawResponse(
     {
@@ -1292,6 +1307,13 @@ test("raw proof classification marks scenario A as blocker without structured se
 
   assert.equal(result.verdict, "blocker");
   assert.match(result.reason, /inline URLs|structured URLs/);
+  assert.equal(result.summary.searchCallCount, 1);
+  assert.deepEqual(result.summary.structuredSourceCounts, {
+    actionSources: 0,
+    resultSources: 0,
+    annotationSources: 0,
+    inlineSources: 1,
+  });
 });
 
 test("raw proof classification passes scenario B only when search stays absent", () => {
@@ -1379,6 +1401,106 @@ test("verifier classification marks sentinel-only scenario A as blocker", () => 
 
   assert.equal(result.verdict, "blocker");
   assert.match(result.reason, /sentinel/);
+  assert.equal(result.summary.serverToolEventCount, 1);
+  assert.equal(result.summary.webSearchResultEventCount, 1);
+  assert.equal(result.summary.finalServerToolUseCount, 1);
+  assert.equal(result.summary.finalWebSearchResultCount, 1);
+  assert.equal(result.summary.resultBlockCount, 1);
+  assert.equal(result.summary.sentinelCount, 1);
+});
+
+test("proof helper rejects verifier streams without final message_end", () => {
+  const events = parseJsonlEvents(
+    '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","partial":{"content":[]}}}\n',
+  );
+
+  assert.throws(
+    () => findAssistantMessageEnd(events),
+    /message_end/,
+  );
+});
+
+test("verifier classification ignores valid www domains and still rejects standalone garbage placeholders", () => {
+  const passResult = classifyVerifierJsonl(
+    parseJsonlEvents(
+      [
+        JSON.stringify({
+          type: "message_update",
+          assistantMessageEvent: {
+            type: "server_tool_use",
+            contentIndex: 0,
+            partial: {
+              role: "assistant",
+              content: [{ type: "serverToolUse", id: "ws_1", name: "web_search", input: { query: "openai news" } }],
+            },
+          },
+        }),
+        JSON.stringify({
+          type: "message_update",
+          assistantMessageEvent: {
+            type: "web_search_result",
+            contentIndex: 0,
+            partial: {
+              role: "assistant",
+              content: [
+                {
+                  type: "webSearchResult",
+                  toolUseId: "ws_1",
+                  content: [
+                    {
+                      type: "web_search_result",
+                      title: "Axios",
+                      url: "https://www.axios.com/2026/04/02/openai-acquires-tbpn",
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+        }),
+        JSON.stringify({
+          type: "message_end",
+          message: {
+            role: "assistant",
+            content: [
+              { type: "serverToolUse", id: "ws_1", name: "web_search", input: { query: "openai news" } },
+              {
+                type: "webSearchResult",
+                toolUseId: "ws_1",
+                content: [
+                  {
+                    type: "web_search_result",
+                    title: "Axios",
+                    url: "https://www.axios.com/2026/04/02/openai-acquires-tbpn",
+                  },
+                ],
+              },
+              { type: "text", text: "Done" },
+            ],
+          },
+        }),
+      ].join("\n"),
+    ),
+    "A",
+  );
+  assert.equal(passResult.verdict, "pass");
+
+  const failResult = classifyVerifierJsonl(
+    parseJsonlEvents(
+      [
+        JSON.stringify({
+          type: "message_end",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "Garbage https://www placeholder" }],
+          },
+        }),
+      ].join("\n"),
+    ),
+    "B",
+  );
+  assert.equal(failResult.verdict, "fail");
+  assert.match(failResult.reason, /мусорный URL|garbage URL/);
 });
 
 test("verifier classification keeps scenario B clean and rejects garbage URLs", () => {

@@ -65,6 +65,31 @@ export function shellQuote(value) {
 }
 
 /**
+ * Формирование ISO timestamp для proof-артефактов.
+ *
+ * @param {Date | string | number | undefined} [value] Дата или timestamp.
+ * @returns {string} ISO-строка.
+ */
+export function formatProofTimestamp(value = undefined) {
+  return new Date(value ?? Date.now()).toISOString();
+}
+
+/**
+ * Добавление timestamp к результату сценария.
+ *
+ * @template T
+ * @param {T} result Результат сценария.
+ * @param {string} [observedAt] Время фиксации результата.
+ * @returns {T & {observedAt: string}} Результат с timestamp.
+ */
+export function stampScenarioResult(result, observedAt = formatProofTimestamp()) {
+  return {
+    ...result,
+    observedAt,
+  };
+}
+
+/**
  * Нормализация списка сценариев из CLI args.
  *
  * @param {string[] | undefined} rawScenarios Сырые значения `--scenario`.
@@ -424,13 +449,17 @@ export function summarizeAssistantMessage(message) {
 }
 
 /**
- * Проверка placeholder garbage URL.
+ * Проверка standalone placeholder URL без домена верхнего уровня.
+ *
+ * Валидные `www.<domain>` ссылки не считаются мусором. Матчится только
+ * усечённый placeholder вида `https://www`, за которым сразу идёт конец строки
+ * или разделитель URL/token.
  *
  * @param {unknown} value Проверяемое значение.
- * @returns {boolean} true, если найден `https://www`.
+ * @returns {boolean} true, если найден standalone `https://www`.
  */
 export function hasGarbageUrl(value) {
-  return /https:\/\/www\b/u.test(JSON.stringify(value));
+  return /https:\/\/www(?:(?=$)|(?=[\\/"'\s)\]}>,;:!?])|(?=[/?#]))/u.test(JSON.stringify(value));
 }
 
 /**
@@ -464,11 +493,16 @@ export function classifyVerifierJsonl(events, scenario) {
   const summary = {
     assistantEventTypes,
     serverToolEventIds,
+    serverToolEventCount: serverToolEventIds.length,
     webSearchResultEventIds,
+    webSearchResultEventCount: webSearchResultEventIds.length,
     contentTypes: messageSummary.contentTypes,
     finalServerToolUseIds: messageSummary.serverToolUseIds,
+    finalServerToolUseCount: messageSummary.serverToolUseIds.length,
     finalWebSearchResultIds: messageSummary.webSearchResultIds,
+    finalWebSearchResultCount: messageSummary.webSearchResultIds.length,
     resultBlocks: messageSummary.resultBlocks,
+    resultBlockCount: messageSummary.resultBlocks.length,
     inlineSourceCount: messageSummary.inlineSourceCount,
     sentinelCount,
     garbageUrlDetected,
@@ -621,7 +655,14 @@ export function summarizeRawResponse(response) {
 
   return {
     outputTypes: output.map((item) => String(item?.type || "unknown")),
+    searchCallCount: searchCalls.length,
     searchCalls: perCall,
+    structuredSourceCounts: {
+      actionSources: totalActionSourceCount,
+      resultSources: totalResultSourceCount,
+      annotationSources: annotationSources.length,
+      inlineSources: inlineSources.length,
+    },
     annotationSourceCount: annotationSources.length,
     inlineSourceCount: inlineSources.length,
     totalStructuredSourceCount: totalActionSourceCount + totalResultSourceCount + annotationSources.length,

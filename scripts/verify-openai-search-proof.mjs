@@ -4,11 +4,13 @@ import {
   buildVerifierCommand,
   classifyVerifierJsonl,
   formatProofHelp,
+  formatProofTimestamp,
   isMainModule,
   parseJsonlEvents,
   parseProofCliArgs,
   resolveAbsoluteExtensionPath,
   runSpawnVerifierHarness,
+  stampScenarioResult,
 } from "./openai-search-proof-lib.mjs";
 
 /**
@@ -47,12 +49,15 @@ function main() {
   }
 
   const extensionPath = resolveAbsoluteExtensionPath(args.extensionPath);
+  const capturedAt = formatProofTimestamp();
   const scenarios = args.scenarios.map((scenario) =>
-    runVerifierScenario({
-      extensionPath,
-      modelRef: args.modelRef,
-      scenario,
-    }),
+    stampScenarioResult(
+      runVerifierScenario({
+        extensionPath,
+        modelRef: args.modelRef,
+        scenario,
+      }),
+    ),
   );
   const overallVerdict = aggregateVerdict(scenarios);
 
@@ -60,6 +65,7 @@ function main() {
     JSON.stringify(
       {
         script: "verify-openai-search-proof",
+        capturedAt,
         extensionPath,
         model: args.modelRef,
         maxBufferBytes: 1024 * 1024,

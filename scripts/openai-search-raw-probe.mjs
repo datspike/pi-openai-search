@@ -5,6 +5,8 @@ import {
   aggregateVerdict,
   classifyRawResponse,
   formatProofHelp,
+  formatProofTimestamp,
+  stampScenarioResult,
   isMainModule,
   loadModelClient,
   parseProofCliArgs,
@@ -44,16 +46,18 @@ async function main() {
 
   const extensionPath = resolveAbsoluteExtensionPath(args.extensionPath);
   const { client, model, agentDir } = await loadModelClient(args.modelRef);
+  const capturedAt = formatProofTimestamp();
   const scenarios = [];
 
   for (const scenario of args.scenarios) {
-    scenarios.push(await runRawScenario({ client, model, scenario }));
+    scenarios.push(stampScenarioResult(await runRawScenario({ client, model, scenario })));
   }
 
   console.log(
     JSON.stringify(
       {
         script: "openai-search-raw-probe",
+        capturedAt,
         extensionPath,
         agentDir,
         model: `${model.provider}/${model.id}`,
