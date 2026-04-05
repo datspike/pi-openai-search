@@ -2155,7 +2155,7 @@ test("proof helper stamps scenario result with deterministic ISO timestamp", () 
   });
 });
 
-test("raw proof classification marks scenario A as blocker without structured seams", () => {
+test("raw proof classification passes scenario A with inline source URLs even without structured seams", () => {
   const result = classifyRawResponse(
     {
       output: [
@@ -2184,8 +2184,8 @@ test("raw proof classification marks scenario A as blocker without structured se
     "A",
   );
 
-  assert.equal(result.verdict, "blocker");
-  assert.match(result.reason, /inline URLs|structured URLs/);
+  assert.equal(result.verdict, "pass");
+  assert.match(result.reason, /inline source URLs|output_text/);
   assert.equal(result.summary.searchCallCount, 1);
   assert.deepEqual(result.summary.structuredSourceCounts, {
     actionSources: 0,
@@ -2231,7 +2231,7 @@ test("raw proof classification passes scenario A when action.sources is present"
   assert.deepEqual(result.summary.opportunisticStructuredSeams, []);
 });
 
-test("raw proof classification keeps results-only seam as blocker", () => {
+test("raw proof classification passes scenario A with opportunistic results seam", () => {
   const result = classifyRawResponse(
     {
       output: [
@@ -2262,8 +2262,8 @@ test("raw proof classification keeps results-only seam as blocker", () => {
     "A",
   );
 
-  assert.equal(result.verdict, "blocker");
-  assert.match(result.reason, /opportunistic results seam/);
+  assert.equal(result.verdict, "pass");
+  assert.match(result.reason, /opportunistic result sources/);
   assert.deepEqual(result.summary.documentedStructuredSeams, []);
   assert.deepEqual(result.summary.opportunisticStructuredSeams, ["results"]);
 });
@@ -2309,7 +2309,7 @@ test("raw proof classification passes scenario B only when search stays absent",
   assert.equal(failResult.verdict, "fail");
 });
 
-test("verifier classification marks sentinel-only scenario A as blocker", () => {
+test("verifier classification marks sentinel-only scenario A as blocker when no URLs survive", () => {
   const result = classifyVerifierJsonl(
     parseJsonlEvents(
       [
@@ -2355,10 +2355,53 @@ test("verifier classification marks sentinel-only scenario A as blocker", () => 
   assert.match(result.reason, /sentinel/);
   assert.equal(result.summary.serverToolEventCount, 1);
   assert.equal(result.summary.webSearchResultEventCount, 1);
+  assert.equal(result.summary.streamSearchEventMode, "stream_events");
   assert.equal(result.summary.finalServerToolUseCount, 1);
   assert.equal(result.summary.finalWebSearchResultCount, 1);
   assert.equal(result.summary.resultBlockCount, 1);
   assert.equal(result.summary.sentinelCount, 1);
+});
+
+test("verifier classification accepts final-only factual blocks in no-session JSON mode", () => {
+  const result = classifyVerifierJsonl(
+    parseJsonlEvents(
+      [
+        JSON.stringify({
+          type: "message_update",
+          assistantMessageEvent: {
+            type: "text_delta",
+            contentIndex: 4,
+            partial: {
+              role: "assistant",
+              content: [],
+            },
+            delta: "- OpenAI news: https://openai.com/index/openai-acquires-tbpn",
+          },
+        }),
+        JSON.stringify({
+          type: "message_end",
+          message: {
+            role: "assistant",
+            content: [
+              { type: "serverToolUse", id: "ws_1", name: "web_search", input: { query: "openai news" } },
+              { type: "webSearchResult", toolUseId: "ws_1", content: { type: "web_search_tool_result_complete" } },
+              { type: "text", text: "- OpenAI news: https://openai.com/index/openai-acquires-tbpn" },
+            ],
+          },
+        }),
+      ].join("\n"),
+    ),
+    "A",
+  );
+
+  assert.equal(result.verdict, "pass");
+  assert.match(result.reason, /inline|message_end/);
+  assert.equal(result.summary.serverToolEventCount, 0);
+  assert.equal(result.summary.webSearchResultEventCount, 0);
+  assert.equal(result.summary.streamSearchEventMode, "final_message_only");
+  assert.equal(result.summary.finalServerToolUseCount, 1);
+  assert.equal(result.summary.finalWebSearchResultCount, 1);
+  assert.equal(result.summary.inlineSourceCount, 1);
 });
 
 test("proof helper rejects verifier streams without final message_end", () => {

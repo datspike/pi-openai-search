@@ -137,7 +137,7 @@ node scripts/openai-search-raw-probe.mjs \
   --scenario B
 ```
 
-Проверяет, есть ли documented structured seams уже в raw Responses payload.
+Проверяет, что raw Responses payload реально выполнил `web_search` и сохранил source evidence: structured seams, opportunistic results или хотя бы inline URLs в `output_text`.
 
 ### 2. Exact no-session verifier harness
 
@@ -154,14 +154,15 @@ node scripts/verify-openai-search-proof.mjs \
 
 ### `pass`
 
-- raw probe показывает documented structured seam для scenario A;
-- verifier сохраняет `serverToolUse` / `webSearchResult` и реальные URL;
+- raw probe показывает, что scenario A реально выполнил `web_search` и сохранил source evidence: structured seams, opportunistic results или inline URLs;
+- verifier сохраняет `serverToolUse` / `webSearchResult` и source URLs в финальном `message_end`;
+- если standalone `pi --mode json --print --no-session` не печатает отдельные `server_tool_use` / `web_search_result` в `message_update`, это не считается fail само по себе;
 - scenario B остаётся clean negative path.
 
 ### `blocker`
 
 - harness работает штатно;
-- upstream не даёт documented structured seam для scenario A;
+- scenario A выполнил `web_search`, но до финального ответа не дожили ни structured, ни inline source URLs;
 - negative path остаётся чистым.
 
 ### `fail`

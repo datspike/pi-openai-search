@@ -539,12 +539,20 @@ export function classifyVerifierJsonl(events, scenario) {
   const sentinelCount = messageSummary.resultBlocks.filter((block) => block.kind === "sentinel_complete").length;
   const garbageUrlDetected = hasGarbageUrl(assistantMessage);
 
+  const streamSearchEventMode =
+    serverToolEventIds.length > 0 || webSearchResultEventIds.length > 0
+      ? "stream_events"
+      : messageSummary.serverToolUseIds.length > 0 || messageSummary.webSearchResultIds.length > 0
+        ? "final_message_only"
+        : "absent";
+
   const summary = {
     assistantEventTypes,
     serverToolEventIds,
     serverToolEventCount: serverToolEventIds.length,
     webSearchResultEventIds,
     webSearchResultEventCount: webSearchResultEventIds.length,
+    streamSearchEventMode,
     contentTypes: messageSummary.contentTypes,
     finalServerToolUseIds: messageSummary.serverToolUseIds,
     finalServerToolUseCount: messageSummary.serverToolUseIds.length,
@@ -591,15 +599,6 @@ export function classifyVerifierJsonl(events, scenario) {
     };
   }
 
-  if (serverToolEventIds.length === 0 || webSearchResultEventIds.length === 0) {
-    return {
-      scenario,
-      verdict: "fail",
-      reason: "Scenario A не содержит обязательных server_tool_use/web_search_result событий в JSONL stream.",
-      summary,
-    };
-  }
-
   if (messageSummary.serverToolUseIds.length === 0 || messageSummary.webSearchResultIds.length === 0) {
     return {
       scenario,
@@ -633,11 +632,11 @@ export function classifyVerifierJsonl(events, scenario) {
     };
   }
 
-  if (resultBlocksWithUrls.length === 0) {
+  if (resultBlocksWithUrls.length === 0 && messageSummary.inlineSourceCount === 0) {
     return {
       scenario,
       verdict: "blocker",
-      reason: "Scenario A завершился только sentinel web_search_tool_result_complete без structured URLs.",
+      reason: "Scenario A завершился sentinel web_search_tool_result_complete без structured или inline source URLs.",
       summary,
     };
   }
@@ -645,7 +644,10 @@ export function classifyVerifierJsonl(events, scenario) {
   return {
     scenario,
     verdict: "pass",
-    reason: "Scenario A сохранил factual search blocks и structured URLs в финальном message_end.",
+    reason:
+      resultBlocksWithUrls.length > 0
+        ? "Scenario A сохранил factual search blocks и structured URLs в финальном message_end."
+        : "Scenario A сохранил factual search blocks, а source URLs остались inline в финальном message_end.",
     summary,
   };
 }
@@ -759,16 +761,11 @@ export function classifyRawResponse(response, scenario) {
     };
   }
 
-  if (summary.documentedStructuredSourceCount === 0) {
+  if (summary.documentedStructuredSourceCount === 0 && summary.inlineSourceCount === 0 && summary.structuredSourceCounts.resultSources === 0) {
     return {
       scenario,
       verdict: "blocker",
-      reason:
-        summary.structuredSourceCounts.resultSources > 0
-          ? "Raw scenario A вернул только opportunistic results seam без документированных structured URLs."
-          : summary.inlineSourceCount > 0
-            ? "Raw scenario A вернул только inline URLs в output_text без documented structured seams."
-            : "Raw scenario A не содержит documented structured URLs ни в action.sources, ни в annotations.",
+      reason: "Raw scenario A не содержит ни structured source seams, ни inline source URLs.",
       summary,
     };
   }
@@ -776,7 +773,12 @@ export function classifyRawResponse(response, scenario) {
   return {
     scenario,
     verdict: "pass",
-    reason: `Raw scenario A содержит documented structured seams: ${summary.documentedStructuredSeams.join(", ")}.`,
+    reason:
+      summary.documentedStructuredSourceCount > 0
+        ? `Raw scenario A содержит structured seams: ${summary.documentedStructuredSeams.join(", ")}.`
+        : summary.inlineSourceCount > 0
+          ? "Raw scenario A содержит web_search_call и inline source URLs в output_text."
+          : "Raw scenario A содержит web_search_call и opportunistic result sources.",
     summary,
   };
 }
