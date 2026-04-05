@@ -1026,6 +1026,49 @@ test("isCompactNoSessionOutput treats piped stdout as compact proof mode", async
   }
 });
 
+test("encodeReasoningSignature keeps mandatory summary for continuation payload", async () => {
+  const tempDir = fs.mkdtempSync(path.join(process.cwd(), ".tmp-pi-openai-search-reasoning-signature-test-"));
+
+  try {
+    const patchModule = await loadTestableDisplayPatchModule(tempDir);
+
+    assert.deepEqual(
+      JSON.parse(
+        patchModule.encodeReasoningSignature({
+          type: "reasoning",
+          id: "rs_test",
+          encrypted_content: "encrypted",
+        }),
+      ),
+      {
+        type: "reasoning",
+        id: "rs_test",
+        encrypted_content: "encrypted",
+        summary: [],
+      },
+    );
+
+    assert.deepEqual(
+      JSON.parse(
+        patchModule.encodeReasoningSignature({
+          type: "reasoning",
+          id: "rs_test_with_summary",
+          encrypted_content: "encrypted",
+          summary: [{ type: "summary_text", text: "Краткое резюме" }],
+        }),
+      ),
+      {
+        type: "reasoning",
+        id: "rs_test_with_summary",
+        encrypted_content: "encrypted",
+        summary: [{ type: "summary_text", text: "Краткое резюме" }],
+      },
+    );
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("enrichOutputFromCompletedResponse keeps per-call truthfulness and backfills terminal search only", async () => {
   const tempDir = fs.mkdtempSync(path.join(process.cwd(), ".tmp-pi-openai-search-enrich-test-"));
 

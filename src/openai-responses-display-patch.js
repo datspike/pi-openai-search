@@ -250,21 +250,22 @@ function encodeTextSignatureV1(id, phase) {
 /**
  * Компактное представление reasoning item для последующих turn-ов.
  *
- * OpenAI Responses требует вернуть parseable reasoning item, но для session history
- * здесь достаточно identity + encrypted content. Полный summary раздувает каждый
- * JSONL `message_update`, потому что `partial` повторяет весь накопленный output.
+ * OpenAI Responses требует вернуть parseable reasoning item с обязательным
+ * `summary`, поэтому сохраняем минимально достаточную форму: identity,
+ * encrypted content и summary. Пустой summary допустим и не ломает continuation.
  *
  * @param {any} item OpenAI reasoning item.
  * @returns {string | undefined} Компактная JSON-signature или undefined.
  */
-function encodeReasoningSignature(item) {
+export function encodeReasoningSignature(item) {
   if (!item || typeof item !== "object") {
     return undefined;
   }
 
-  /** @type {{type: "reasoning", id?: string, encrypted_content?: string, status?: string}} */
+  /** @type {{type: "reasoning", id?: string, encrypted_content?: string, status?: string, summary: Array<any>}} */
   const payload = {
     type: "reasoning",
+    summary: Array.isArray(item.summary) ? item.summary : [],
   };
 
   if (typeof item.id === "string" && item.id.length > 0) {
