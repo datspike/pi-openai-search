@@ -13,11 +13,34 @@ import {
 } from "./src/openai-responses-display-patch.js";
 import { registerInteractiveSearchOrderPatch } from "./src/openai-interactive-search-order-patch.js";
 import { registerTruthfulInteractiveWebSearchPatch } from "./src/openai-tool-execution-web-search-patch.js";
-
-await registerInteractiveSearchOrderPatch();
-await registerTruthfulInteractiveWebSearchPatch();
+import { registerCompatLayer } from "./src/gsd-pi-compat.js";
 
 const NATIVE_SEARCH_STATUS_KEY = "openai-native-web-search";
+let uiCompatRegistrationPromise;
+
+/**
+ * Ленивая регистрация UI compat-слоёв.
+ *
+ * @returns {Promise<{inline: {applied: boolean}, toolExecution: {applied: boolean}}>} Результат регистрации.
+ */
+async function ensureUiCompatLayers() {
+  if (!uiCompatRegistrationPromise) {
+    uiCompatRegistrationPromise = Promise.all([
+      registerCompatLayer(
+        "interactive-inline-search",
+        () => registerInteractiveSearchOrderPatch(),
+        process.env.PI_OPENAI_NATIVE_SEARCH_INTERACTIVE_COMPAT,
+      ),
+      registerCompatLayer(
+        "interactive-web-search-render",
+        () => registerTruthfulInteractiveWebSearchPatch(),
+        process.env.PI_OPENAI_NATIVE_SEARCH_TOOL_RENDER_COMPAT,
+      ),
+    ]).then(([inline, toolExecution]) => ({ inline, toolExecution }));
+  }
+
+  return uiCompatRegistrationPromise;
+}
 
 /**
  * Отладочный снимок payload перед отправкой провайдеру.
@@ -144,10 +167,12 @@ function getLastActiveSearch(activeSearches) {
  * @param {any} pi Экземпляр pi runtime.
  */
 export default function registerOpenAISearchExtension(pi) {
-  registerOpenAIResponsesDisplayPatch();
+  void ensureUiCompatLayers();
 
   if (typeof pi.registerProvider === "function") {
     pi.registerProvider("openai", buildPatchedOpenAIResponsesProviderConfig());
+  } else {
+    registerOpenAIResponsesDisplayPatch();
   }
 
   let lastStatusKey;
@@ -176,6 +201,16 @@ export default function registerOpenAISearchExtension(pi) {
 
     ctx.ui.setWorkingMessage();
     ctx.ui.setStatus(NATIVE_SEARCH_STATUS_KEY, nativeReadyStatus);
+
+    if (nativeActive) {
+      const compat = await ensureUiCompatLayers();
+      if (!compat.inline.applied || !compat.toolExecution.applied) {
+        ctx.ui.notify(
+          "UI compat для native search недоступен; включён безопасный fallback-рендеринг",
+          "warning",
+        );
+      }
+    }
 
     if (nativeActive) {
       const parts = [

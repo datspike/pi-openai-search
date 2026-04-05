@@ -11,6 +11,7 @@ import {
   extractInlineSourcesFromText,
   extractResultSources,
 } from "../src/openai-search-display.js";
+import { resolveGsdBinPath } from "../src/gsd-pi-compat.js";
 
 export const DEFAULT_PROOF_MODEL = "openai/gpt-5.4";
 export const DEFAULT_GSD_AGENT_DIR = path.join(os.homedir(), ".gsd", "agent");
@@ -235,11 +236,16 @@ export function parseModelRef(modelRef) {
  * @returns {{agentDir: string, authPath: string, modelsPath: string, gsdRoot: string}} Набор путей.
  */
 export function resolveRuntimePaths() {
-  const gsdBinPath = process.env.GSD_BIN_PATH;
-  if (!gsdBinPath) {
+  let gsdBinPath;
+  try {
+    gsdBinPath = resolveGsdBinPath();
+  } catch (error) {
     throw new SearchProofError(
       "missing_gsd_bin_path",
-      "Переменная GSD_BIN_PATH не задана; raw probe не может загрузить gsd-pi runtime.",
+      "Не удалось определить путь к gsd binary; raw probe не может загрузить gsd-pi runtime.",
+      {
+        cause: error instanceof Error ? error.message : String(error),
+      },
     );
   }
 

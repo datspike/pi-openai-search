@@ -1,5 +1,4 @@
-import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { importGsdPiModule } from "./gsd-pi-compat.js";
 
 const INLINE_SEARCH_PATCH_MARKER = Symbol.for("pi-openai-search.inline-search-order-patched");
 const INLINE_SEARCH_RENDER_CONTEXT = Symbol.for("pi-openai-search.inline-search-render-context");
@@ -8,86 +7,20 @@ const INLINE_SEARCH_EXPANDED = Symbol.for("pi-openai-search.inline-search-expand
 let interactiveSearchOrderPatchPromise;
 
 /**
- * Определение корня установленного gsd-pi.
- *
- * @returns {string} Абсолютный путь к корню пакета.
- */
-function resolveGsdPiRoot() {
-  const binPath = process.env.GSD_BIN_PATH;
-  if (!binPath) {
-    throw new Error("Не задан GSD_BIN_PATH; невозможно загрузить interactive search-order runtime.");
-  }
-
-  return path.resolve(path.dirname(binPath), "..", "lib", "node_modules", "gsd-pi");
-}
-
-/**
  * Загрузка interactive runtime для truthful search-order patch.
  *
  * @returns {Promise<{AssistantMessageComponent: any, ToolExecutionComponent: any, InteractiveMode: any, Spacer: any, Text: any, Markdown: any, theme: any, formatTimestamp: Function}>} Runtime-модули.
  */
 async function loadInteractiveSearchOrderRuntime() {
-  const root = resolveGsdPiRoot();
-  const assistantMessagePath = path.join(
-    root,
-    "packages",
-    "pi-coding-agent",
-    "dist",
-    "modes",
-    "interactive",
-    "components",
-    "assistant-message.js",
-  );
-  const toolExecutionPath = path.join(
-    root,
-    "packages",
-    "pi-coding-agent",
-    "dist",
-    "modes",
-    "interactive",
-    "components",
-    "tool-execution.js",
-  );
-  const interactiveModePath = path.join(
-    root,
-    "packages",
-    "pi-coding-agent",
-    "dist",
-    "modes",
-    "interactive",
-    "interactive-mode.js",
-  );
-  const piTuiPath = path.join(root, "node_modules", "@gsd", "pi-tui", "dist", "index.js");
-  const themePath = path.join(
-    root,
-    "packages",
-    "pi-coding-agent",
-    "dist",
-    "modes",
-    "interactive",
-    "theme",
-    "theme.js",
-  );
-  const timestampPath = path.join(
-    root,
-    "packages",
-    "pi-coding-agent",
-    "dist",
-    "modes",
-    "interactive",
-    "components",
-    "timestamp.js",
-  );
-
   try {
     const [assistantMessageModule, toolExecutionModule, interactiveModeModule, piTuiModule, themeModule, timestampModule] =
       await Promise.all([
-        import(pathToFileURL(assistantMessagePath).href),
-        import(pathToFileURL(toolExecutionPath).href),
-        import(pathToFileURL(interactiveModePath).href),
-        import(pathToFileURL(piTuiPath).href),
-        import(pathToFileURL(themePath).href),
-        import(pathToFileURL(timestampPath).href),
+        importGsdPiModule("packages/pi-coding-agent/dist/modes/interactive/components/assistant-message.js"),
+        importGsdPiModule("packages/pi-coding-agent/dist/modes/interactive/components/tool-execution.js"),
+        importGsdPiModule("packages/pi-coding-agent/dist/modes/interactive/interactive-mode.js"),
+        importGsdPiModule("node_modules/@gsd/pi-tui/dist/index.js"),
+        importGsdPiModule("packages/pi-coding-agent/dist/modes/interactive/theme/theme.js"),
+        importGsdPiModule("packages/pi-coding-agent/dist/modes/interactive/components/timestamp.js"),
       ]);
 
     return {
@@ -540,6 +473,7 @@ export async function registerInteractiveSearchOrderPatch() {
           runtime.InteractiveMode,
           runtime,
         );
+        return true;
       })
       .catch((error) => {
         interactiveSearchOrderPatchPromise = undefined;

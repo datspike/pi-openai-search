@@ -194,6 +194,22 @@ export function ensureNativeSearchIncludes(payload) {
 }
 
 /**
+ * Добавление include-поля без потери существующих значений.
+ *
+ * @param {Record<string, any>} payload Provider payload.
+ * @param {string} field Include-поле.
+ * @returns {void}
+ */
+export function appendUniqueIncludeField(payload, field) {
+  const existing = Array.isArray(payload?.include) ? payload.include : [];
+  if (existing.includes(field)) {
+    return;
+  }
+
+  payload.include = [...existing, field];
+}
+
+/**
  * Инъекция native web_search в provider payload.
  *
  * @param {Record<string, any>} payload Provider payload.

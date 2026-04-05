@@ -1,6 +1,3 @@
-import path from "node:path";
-import { pathToFileURL } from "node:url";
-
 import {
   AssistantMessageEventStream,
   getEnvApiKey,
@@ -17,6 +14,8 @@ import {
   resolveWebSearchResultSources,
   summarizeSearchInput,
 } from "./openai-search-display.js";
+import { appendUniqueIncludeField } from "./openai-native-search.js";
+import { importGsdPiModule } from "./gsd-pi-compat.js";
 
 const OPENAI_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex", "opencode"]);
 
@@ -53,21 +52,8 @@ function clampReasoning(effort) {
   return effort === "xhigh" ? "high" : effort;
 }
 
-/**
- * Определение корня установленного gsd-pi.
- *
- * @returns {string} Абсолютный путь к корню пакета.
- */
-function resolveGsdPiRoot() {
-  const binPath = process.env.GSD_BIN_PATH;
-  if (!binPath) {
-    throw new Error("GSD_BIN_PATH is not set; cannot load internal pi-ai modules.");
-  }
-
-  return path.resolve(path.dirname(binPath), "..", "lib", "node_modules", "gsd-pi");
-}
-
 let internalsPromise;
+let providerRegistered = false;
 
 /**
  * Загрузка внутренних helper-модулей pi-ai.
@@ -76,13 +62,9 @@ let internalsPromise;
  */
 async function loadPiAiInternals() {
   if (!internalsPromise) {
-    const root = resolveGsdPiRoot();
-    const sharedPath = path.join(root, "packages", "pi-ai", "dist", "providers", "openai-responses-shared.js");
-    const openaiSharedPath = path.join(root, "packages", "pi-ai", "dist", "providers", "openai-shared.js");
-
     internalsPromise = Promise.all([
-      import(pathToFileURL(sharedPath).href),
-      import(pathToFileURL(openaiSharedPath).href),
+      importGsdPiModule("packages/pi-ai/dist/providers/openai-responses-shared.js"),
+      importGsdPiModule("packages/pi-ai/dist/providers/openai-shared.js"),
     ]).then(([responsesShared, openaiShared]) => ({
       convertResponsesMessages: responsesShared.convertResponsesMessages,
       convertResponsesTools: responsesShared.convertResponsesTools,
@@ -140,7 +122,7 @@ function getPromptCacheRetention(baseUrl, cacheRetention) {
  * @param {Record<string, any>} internals Внутренние helper-функции.
  * @returns {Record<string, any>} Payload запроса.
  */
-function buildPatchedParams(model, context, options, internals) {
+export function buildPatchedParams(model, context, options, internals) {
   const messages = internals.convertResponsesMessages(model, context, OPENAI_TOOL_CALL_PROVIDERS);
   const cacheRetention = resolveCacheRetention(options?.cacheRetention);
   const params = {
@@ -172,23 +154,13 @@ function buildPatchedParams(model, context, options, internals) {
   const requestedReasoningSummary = options?.reasoningSummary;
 
   if (model.reasoning) {
-    params.include = ["reasoning.encrypted_content"];
+    appendUniqueIncludeField(params, "reasoning.encrypted_content");
     if (requestedReasoningEffort || requestedReasoningSummary) {
       const effort = internals.clampReasoningForModel(model.name, requestedReasoningEffort || "medium");
       params.reasoning = {
         effort: effort || "medium",
         summary: requestedReasoningSummary || "auto",
       };
-    } else if (model.name.startsWith("gpt-5")) {
-      messages.push({
-        role: "developer",
-        content: [
-          {
-            type: "input_text",
-            text: "# Juice: 0 !important",
-          },
-        ],
-      });
     }
   }
 
@@ -909,6 +881,10 @@ export function buildPatchedOpenAIResponsesProviderConfig() {
  * @returns {void}
  */
 export function registerOpenAIResponsesDisplayPatch() {
+  if (providerRegistered) {
+    return;
+  }
+
   registerApiProvider(
     {
       api: "openai-responses",
@@ -917,4 +893,5 @@ export function registerOpenAIResponsesDisplayPatch() {
     },
     "pi-openai-search",
   );
+  providerRegistered = true;
 }

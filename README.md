@@ -28,11 +28,13 @@ POC extension для `gsd` / `pi`, который включает нативн�
 - выставляет `tool_choice = "auto"`, если поле не задано
 - выставляет `parallel_tool_calls = true`, если поле не задано
 - поддерживает live/cached режим и базовые фильтры через env
-- патчит provider `openai-responses` через `registerApiProvider()` так, чтобы финальный assistant message содержал:
+- использует `pi.registerProvider("openai", ...)` как основной seam, а глобальный `registerApiProvider()` оставляет только как fallback для старого runtime
+- патчит provider `openai-responses` узким compat-слоем так, чтобы финальный assistant message содержал:
   - `serverToolUse` для `web_search_call`
   - `webSearchResult` для завершённого native search
   - добавленные в текст citations, если OpenAI вернул structured annotations, которых ещё нет в тексте
-- патчит interactive/replay renderer `gsd-pi`, чтобы native `web_search` оставался отдельным structured tool block, но стоял в хронологическом порядке внутри assistant turn, а не прилипал в конец чата
+- не подмешивает скрытые developer prompts для управления reasoning
+- патчит interactive/replay renderer `gsd-pi` только как optional compat-слой: если приватный upstream runtime изменился, extension деградирует в safe fallback без падения на import
 - truthful query label обновляется из реального provider payload, если query появляется позже в completed response; если query нет, UI честно показывает нейтральный label без synthetic fallback
 
 ## Ограничения POC
@@ -92,6 +94,34 @@ PI_OPENAI_NATIVE_SEARCH_MODE=live \
   - если задан, extension пишет json-снимок финального provider payload перед отправкой
 - `PI_OPENAI_NATIVE_SEARCH_DEBUG_MESSAGE_FILE=/tmp/pi-openai-search-message.json`
   - если задан, extension пишет json-снимок финального assistant message на `message_end`
+
+### Compat-слои
+
+- `GSD_BIN_PATH=/abs/path/to/gsd`
+  - optional
+  - если не задан, extension пытается сам найти `gsd` через `PATH`
+- `PI_OPENAI_NATIVE_SEARCH_INTERACTIVE_COMPAT=true|false`
+  - default: `true`
+  - включает inline search-order patch для interactive/replay UI
+- `PI_OPENAI_NATIVE_SEARCH_TOOL_RENDER_COMPAT=true|false`
+  - default: `true`
+  - включает truthful formatter для `web_search` в interactive tool execution
+
+## Supported Seams
+
+- `payload layer`: инъекция native `web_search`, include-полей и удаление конфликтующих search tools
+- `provider compat layer`: локальный compat-fork для `openai-responses`, который проецирует `web_search_call` в `serverToolUse` / `webSearchResult`
+- `interactive compat layer`: optional prototype patch для inline chronological order и truthful label в supported runtime shape
+
+## Safe Degradation
+
+- если compat runtime не найден или upstream shape поменялся, extension не падает на import и остаётся в payload/provider path
+- если upstream не отдаёт documented structured sources, `webSearchResult` остаётся truthful sentinel без synthetic citations
+- для полной smoke-проверки compat runtime можно запускать:
+
+```bash
+GSD_BIN_PATH="$(command -v gsd)" npm test
+```
 
 ## Глобальное включение в gsd
 
