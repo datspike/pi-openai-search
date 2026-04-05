@@ -1,4 +1,4 @@
-import { importGsdPiModule } from "./gsd-pi-compat.js";
+import { importPiRuntimeModule } from "./pi-runtime.js";
 import { formatWebSearchResult as formatInlineWebSearchResult } from "./openai-search-display.js";
 
 const INLINE_SEARCH_PATCH_MARKER = Symbol.for("pi-openai-search.inline-search-order-patched");
@@ -16,11 +16,11 @@ async function loadInteractiveSearchOrderRuntime() {
   try {
     const [assistantMessageModule, toolExecutionModule, interactiveModeModule, piTuiModule, themeModule] =
       await Promise.all([
-        importGsdPiModule("packages/pi-coding-agent/dist/modes/interactive/components/assistant-message.js"),
-        importGsdPiModule("packages/pi-coding-agent/dist/modes/interactive/components/tool-execution.js"),
-        importGsdPiModule("packages/pi-coding-agent/dist/modes/interactive/interactive-mode.js"),
-        importGsdPiModule("node_modules/@gsd/pi-tui/dist/index.js"),
-        importGsdPiModule("packages/pi-coding-agent/dist/modes/interactive/theme/theme.js"),
+        importPiRuntimeModule("dist/modes/interactive/components/assistant-message.js"),
+        importPiRuntimeModule("dist/modes/interactive/components/tool-execution.js"),
+        importPiRuntimeModule("dist/modes/interactive/interactive-mode.js"),
+        importPiRuntimeModule("node_modules/@mariozechner/pi-tui/dist/index.js"),
+        importPiRuntimeModule("dist/modes/interactive/theme/theme.js"),
       ]);
 
     return {

@@ -12,14 +12,13 @@ import {
   extractResultSources,
 } from "../src/openai-search-display.js";
 import {
-  importRuntimeModule,
-  resolveAgentBinPath,
-  resolveRuntimeDescriptor,
-} from "../src/gsd-pi-compat.js";
+  importPiRuntimeModule,
+  resolvePiBinPath,
+  resolvePiRuntimeDescriptor,
+} from "../src/pi-runtime.js";
 
 export const DEFAULT_PROOF_MODEL = "openai/gpt-5.4";
 export const DEFAULT_PI_AGENT_DIR = path.join(os.homedir(), ".pi", "agent");
-export const DEFAULT_GSD_AGENT_DIR = path.join(os.homedir(), ".gsd", "agent");
 export const JSONL_VERIFIER_MAX_BUFFER = 1024 * 1024;
 export const JSONL_VERIFIER_TIMEOUT_MS = 240_000;
 export const SEARCH_PROOF_INCLUDE_FIELDS = [
@@ -238,16 +237,16 @@ export function parseModelRef(modelRef) {
 /**
  * Получение системных путей для доступа к установленному runtime.
  *
- * @returns {{agentDir: string, authPath: string, modelsPath: string, runtimeRoot: string, runtimeKind: "pi" | "gsd", binPath: string}} Набор путей.
+ * @returns {{agentDir: string, authPath: string, modelsPath: string, runtimeRoot: string, runtimeKind: "pi", binPath: string}} Набор путей.
  */
 export function resolveRuntimePaths() {
   let runtimeDescriptor;
   try {
-    runtimeDescriptor = resolveRuntimeDescriptor();
+    runtimeDescriptor = resolvePiRuntimeDescriptor();
   } catch (error) {
     throw new SearchProofError(
       "missing_runtime_bin_path",
-      "Не удалось определить путь к pi/gsd binary; raw probe не может загрузить runtime.",
+      "Не удалось определить путь к pi binary; raw probe не может загрузить runtime.",
       {
         cause: error instanceof Error ? error.message : String(error),
       },
@@ -262,14 +261,11 @@ export function resolveRuntimePaths() {
     );
   }
 
-  const defaultAgentDir =
+  const agentDir =
     process.env.PI_AGENT_DIR != null
       ? path.resolve(process.env.PI_AGENT_DIR)
-      : fs.existsSync(DEFAULT_PI_AGENT_DIR)
-        ? DEFAULT_PI_AGENT_DIR
-        : DEFAULT_GSD_AGENT_DIR;
+      : DEFAULT_PI_AGENT_DIR;
 
-  const agentDir = defaultAgentDir;
   return {
     agentDir,
     authPath: path.join(agentDir, "auth.json"),
@@ -281,7 +277,7 @@ export function resolveRuntimePaths() {
 }
 
 /**
- * Загрузка модели и OpenAI client через тот же runtime, что использует pi/gsd.
+ * Загрузка модели и OpenAI client через тот же runtime, что использует standalone pi.
  *
  * @param {string} modelRef Model ref формата `provider/modelId`.
  * @returns {Promise<{model: any, client: any, agentDir: string}>} Модель, client и путь к agent dir.
@@ -291,9 +287,9 @@ export async function loadModelClient(modelRef) {
   const { provider, modelId } = parseModelRef(modelRef);
 
   const [{ AuthStorage }, { ModelRegistry }, piAi] = await Promise.all([
-    importRuntimeModule("packages/pi-coding-agent/dist/core/auth-storage.js"),
-    importRuntimeModule("packages/pi-coding-agent/dist/core/model-registry.js"),
-    importRuntimeModule("packages/pi-ai/dist/index.js"),
+    importPiRuntimeModule("dist/core/auth-storage.js"),
+    importPiRuntimeModule("dist/core/model-registry.js"),
+    importPiRuntimeModule("node_modules/@mariozechner/pi-ai/dist/index.js"),
   ]);
 
   const authStorage = AuthStorage.create(authPath);
@@ -321,10 +317,10 @@ export async function loadModelClient(modelRef) {
 
   let client;
   try {
-    const { createOpenAIClient } = await importRuntimeModule("packages/pi-ai/dist/providers/openai-shared.js");
+    const { createOpenAIClient } = await importPiRuntimeModule("node_modules/@mariozechner/pi-ai/dist/providers/openai-shared.js");
     client = await createOpenAIClient(model, {}, apiKey, {});
   } catch {
-    const openAiModule = await importRuntimeModule("node_modules/openai/index.mjs");
+    const openAiModule = await importPiRuntimeModule("node_modules/openai/index.mjs");
     client = new openAiModule.default({
       apiKey,
       baseURL: model.baseUrl,
@@ -337,7 +333,7 @@ export async function loadModelClient(modelRef) {
 }
 
 /**
- * Разрешение API key для провайдера через новый или legacy auth API runtime.
+ * Разрешение API key для провайдера через доступные auth API runtime.
  *
  * @param {any} authStorage Экземпляр auth storage runtime.
  * @param {string} provider Идентификатор провайдера.
@@ -793,7 +789,7 @@ export function classifyRawResponse(response, scenario) {
  */
 export function buildVerifierCommand({ extensionPath, modelRef, scenario }) {
   const prompt = SEARCH_PROOF_SCENARIOS[scenario].prompt;
-  const binPath = resolveAgentBinPath();
+  const binPath = resolvePiBinPath();
   return [
     `PI_OPENAI_NATIVE_SEARCH=1`,
     `PI_OPENAI_NATIVE_SEARCH_MODE=live`,

@@ -2,7 +2,7 @@ import {
   formatTruthfulWebSearchDoneLabel,
   formatTruthfulWebSearchPendingLabel,
 } from "./openai-search-display.js";
-import { importGsdPiModule } from "./gsd-pi-compat.js";
+import { importPiRuntimeModule } from "./pi-runtime.js";
 
 const WEB_SEARCH_PATCH_MARKER = Symbol.for("pi-openai-search.web-search-tool-execution-patched");
 
@@ -16,9 +16,9 @@ let toolExecutionPatchPromise;
 async function loadInteractiveToolExecutionRuntime() {
   try {
     const [toolExecutionModule, keybindingHintsModule, themeModule] = await Promise.all([
-      importGsdPiModule("packages/pi-coding-agent/dist/modes/interactive/components/tool-execution.js"),
-      importGsdPiModule("packages/pi-coding-agent/dist/modes/interactive/components/keybinding-hints.js"),
-      importGsdPiModule("packages/pi-coding-agent/dist/modes/interactive/theme/theme.js"),
+      importPiRuntimeModule("dist/modes/interactive/components/tool-execution.js"),
+      importPiRuntimeModule("dist/modes/interactive/components/keybinding-hints.js"),
+      importPiRuntimeModule("dist/modes/interactive/theme/theme.js"),
     ]);
 
     return {
@@ -60,7 +60,7 @@ function assertPatchTarget(ToolExecutionComponent) {
  * Truthful rendering одного interactive web_search блока.
  *
  * @param {any} component Экземпляр ToolExecutionComponent.
- * @param {{theme: any, keyHint: Function}} runtime Runtime helpers из gsd-pi.
+ * @param {{theme: any, keyHint: Function}} runtime Runtime helpers из standalone pi.
  * @returns {string} Итоговый текст блока.
  */
 function formatTruthfulInteractiveWebSearch(component, runtime) {
@@ -101,7 +101,7 @@ function formatTruthfulInteractiveWebSearch(component, runtime) {
  * Применение truthful patch к прототипу interactive ToolExecutionComponent.
  *
  * @param {any} ToolExecutionComponent Экспортированный компонент.
- * @param {{theme: any, keyHint: Function}} runtime Runtime helpers из gsd-pi.
+ * @param {{theme: any, keyHint: Function}} runtime Runtime helpers из standalone pi.
  * @returns {void}
  */
 export function applyTruthfulInteractiveWebSearchPatch(ToolExecutionComponent, runtime) {

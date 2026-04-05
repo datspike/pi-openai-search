@@ -1,14 +1,15 @@
 # Scope следующего этапа
 
-Следующий этап работ ограничен интеграцией `openai/openai-responses`.
+Следующий этап работ ограничен интеграцией `openai/openai-responses` в standalone `pi`.
 
 Что входит в scope:
 - сужение и стабилизация локальных compat-слоёв extension;
 - truthful `serverToolUse` / `webSearchResult`;
-- payload/provider/interactive fallback внутри самого extension.
+- payload/provider/interactive fallback внутри самого extension;
+- дальнейшее упрощение `pi-only` runtime seam при необходимости.
 
 Что не входит в scope:
-- изменения upstream `gsd/pi`;
+- изменения upstream `pi`;
 - расширение на `openai-codex-responses`;
 - расширение на `azure-openai-responses`;
 - synthetic citations, synthetic query labels и другие truthfulness-компромиссы.

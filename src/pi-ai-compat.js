@@ -1,23 +1,6 @@
-/**
- * Загрузка совместимого pi-ai пакета для standalone pi и legacy gsd runtime.
- *
- * @returns {Promise<any>} Экспортированный модуль pi-ai.
- */
-async function loadPiAiModule() {
-  try {
-    return await import("@mariozechner/pi-ai");
-  } catch (piError) {
-    try {
-      return await import("@gsd/pi-ai");
-    } catch (gsdError) {
-      const piReason = piError instanceof Error ? piError.message : String(piError);
-      const gsdReason = gsdError instanceof Error ? gsdError.message : String(gsdError);
-      throw new Error(`Не удалось загрузить pi-ai compat module. pi: ${piReason}; gsd: ${gsdReason}`);
-    }
-  }
-}
+import { importPiRuntimeModule } from "./pi-runtime.js";
 
-const piAiModule = await loadPiAiModule();
+const piAiModule = await importPiRuntimeModule("node_modules/@mariozechner/pi-ai/dist/index.js");
 
 export const {
   AssistantMessageEventStream,

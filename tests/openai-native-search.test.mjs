@@ -45,11 +45,11 @@ import {
   stampScenarioResult,
 } from "../scripts/openai-search-proof-lib.mjs";
 import {
-  importRuntimeModule,
-  resetGsdPiCompatCache,
-  resolveGsdPiRoot,
-  resolveRuntimeDescriptor,
-} from "../src/gsd-pi-compat.js";
+  importPiRuntimeModule,
+  resetPiRuntimeCache,
+  resolvePiRuntimeDescriptor,
+  resolvePiRuntimeRoot,
+} from "../src/pi-runtime.js";
 
 async function loadTestableExtensionModule(
   tempDir,
@@ -62,7 +62,7 @@ async function loadTestableExtensionModule(
 ) {
   const sourcePath = fileURLToPath(new URL("../index.js", import.meta.url));
   const searchDisplayPath = fileURLToPath(new URL("../src/openai-search-display.js", import.meta.url));
-  const compatPath = fileURLToPath(new URL("../src/gsd-pi-compat.js", import.meta.url));
+  const compatPath = fileURLToPath(new URL("../src/pi-runtime.js", import.meta.url));
   const mockFsPromisesPath = path.join(tempDir, "fs-promises-mock.js");
   const mockNativeSearchPath = path.join(tempDir, "openai-native-search-mock.js");
   const mockDisplayPatchPath = path.join(tempDir, "openai-responses-display-patch-mock.js");
@@ -114,37 +114,39 @@ async function loadTestableExtensionModule(
       '"./src/openai-tool-execution-web-search-patch.js"',
       JSON.stringify(pathToFileURL(mockToolExecutionPatchPath).href),
     )
-    .replace('"./src/gsd-pi-compat.js"', JSON.stringify(pathToFileURL(compatPath).href));
+    .replace('"./src/pi-runtime.js"', JSON.stringify(pathToFileURL(compatPath).href));
 
   fs.writeFileSync(transformedModulePath, transformedSource, "utf8");
   return import(pathToFileURL(transformedModulePath).href);
 }
 
 async function loadTestableDisplayPatchModule(tempDir) {
+  void tempDir;
   const sourcePath = fileURLToPath(new URL("../src/openai-responses-display-patch.js", import.meta.url));
-  const searchDisplayPath = fileURLToPath(new URL("../src/openai-search-display.js", import.meta.url));
-  const nativeSearchPath = fileURLToPath(new URL("../src/openai-native-search.js", import.meta.url));
-  const compatPath = fileURLToPath(new URL("../src/gsd-pi-compat.js", import.meta.url));
+  return import(`${pathToFileURL(sourcePath).href}?t=${Date.now()}`);
+}
+
+async function loadTestableProviderModule(tempDir) {
+  const sourcePath = fileURLToPath(new URL("../src/openai-responses-provider.js", import.meta.url));
+  const streamModulePath = fileURLToPath(new URL("../src/openai-responses-stream.js", import.meta.url));
   const mockPiAiPath = path.join(tempDir, "pi-ai-mock.js");
-  const transformedModulePath = path.join(tempDir, "openai-responses-display-patch.testable.mjs");
+  const transformedModulePath = path.join(tempDir, "openai-responses-provider.testable.mjs");
 
   fs.writeFileSync(
     mockPiAiPath,
     [
-      "export class AssistantMessageEventStream {}",
-      'export function getEnvApiKey() { return ""; }',
-      "export function registerApiProvider() {}",
-      "export function supportsXhigh() { return false; }",
+      'export function registerApiProvider(provider, sourceId) {',
+      '  globalThis.__providerCalls = globalThis.__providerCalls || [];',
+      '  globalThis.__providerCalls.push({ provider, sourceId });',
+      '}',
     ].join("\n"),
     "utf8",
   );
 
-  const originalSource = fs.readFileSync(sourcePath, "utf8");
-  const transformedSource = originalSource
+  const transformedSource = fs
+    .readFileSync(sourcePath, "utf8")
     .replace('"./pi-ai-compat.js"', JSON.stringify(pathToFileURL(mockPiAiPath).href))
-    .replace('"./openai-search-display.js"', JSON.stringify(pathToFileURL(searchDisplayPath).href))
-    .replace('"./openai-native-search.js"', JSON.stringify(pathToFileURL(nativeSearchPath).href))
-    .replace('"./gsd-pi-compat.js"', JSON.stringify(pathToFileURL(compatPath).href));
+    .replace('"./openai-responses-stream.js"', JSON.stringify(pathToFileURL(streamModulePath).href));
 
   fs.writeFileSync(transformedModulePath, transformedSource, "utf8");
   return import(pathToFileURL(transformedModulePath).href);
@@ -153,13 +155,13 @@ async function loadTestableDisplayPatchModule(tempDir) {
 async function loadTestableInteractiveSearchOrderPatchModule(tempDir) {
   const sourcePath = fileURLToPath(new URL("../src/openai-interactive-search-order-patch.js", import.meta.url));
   const searchDisplayPath = fileURLToPath(new URL("../src/openai-search-display.js", import.meta.url));
-  const compatPath = fileURLToPath(new URL("../src/gsd-pi-compat.js", import.meta.url));
+  const compatPath = fileURLToPath(new URL("../src/pi-runtime.js", import.meta.url));
   const transformedModulePath = path.join(tempDir, "openai-interactive-search-order-patch.testable.mjs");
 
   const transformedSource = fs
     .readFileSync(sourcePath, "utf8")
     .replace('"./openai-search-display.js"', JSON.stringify(pathToFileURL(searchDisplayPath).href))
-    .replace('"./gsd-pi-compat.js"', JSON.stringify(pathToFileURL(compatPath).href));
+    .replace('"./pi-runtime.js"', JSON.stringify(pathToFileURL(compatPath).href));
   fs.writeFileSync(transformedModulePath, transformedSource, "utf8");
   return import(pathToFileURL(transformedModulePath).href);
 }
@@ -522,13 +524,13 @@ test("summarizeSearchInput reads defensive provider query variants", () => {
       type: "search",
       input: {
         query: "openai responses web_search",
-        search_queries: ["openai responses web_search", "gsd native search"],
+        search_queries: ["openai responses web_search", "pi native search"],
       },
     }),
     {
       type: "search",
       query: "openai responses web_search",
-      queries: ["openai responses web_search", "gsd native search"],
+      queries: ["openai responses web_search", "pi native search"],
     },
   );
 });
@@ -993,7 +995,7 @@ test("applyTruthfulInteractiveWebSearchPatch rejects incompatible runtime shape"
 test("interactive web search patch renders truthful labels for pending and done states", async (t) => {
   let runtimeDescriptor;
   try {
-    runtimeDescriptor = resolveRuntimeDescriptor();
+    runtimeDescriptor = resolvePiRuntimeDescriptor();
   } catch (error) {
     t.skip(error instanceof Error ? error.message : String(error));
     return;
@@ -1002,11 +1004,11 @@ test("interactive web search patch renders truthful labels for pending and done 
   await registerTruthfulInteractiveWebSearchPatch();
 
   void runtimeDescriptor;
-  const toolExecutionModule = await importRuntimeModule(
-    "packages/pi-coding-agent/dist/modes/interactive/components/tool-execution.js",
+  const toolExecutionModule = await importPiRuntimeModule(
+    "dist/modes/interactive/components/tool-execution.js",
   );
-  const themeModule = await importRuntimeModule(
-    "packages/pi-coding-agent/dist/modes/interactive/theme/theme.js",
+  const themeModule = await importPiRuntimeModule(
+    "dist/modes/interactive/theme/theme.js",
   );
   themeModule.initTheme("default", false);
 
@@ -2014,40 +2016,10 @@ test("registerOpenAIResponsesDisplayPatch is idempotent on repeated calls", asyn
   const tempDir = fs.mkdtempSync(path.join(process.cwd(), ".tmp-pi-openai-search-test-"));
 
   try {
-    const sourcePath = fileURLToPath(new URL("../src/openai-responses-display-patch.js", import.meta.url));
-    const searchDisplayPath = fileURLToPath(new URL("../src/openai-search-display.js", import.meta.url));
-    const nativeSearchPath = fileURLToPath(new URL("../src/openai-native-search.js", import.meta.url));
-    const compatPath = fileURLToPath(new URL("../src/gsd-pi-compat.js", import.meta.url));
-    const mockPiAiPath = path.join(tempDir, "pi-ai-mock.js");
-    const transformedModulePath = path.join(tempDir, "openai-responses-display-patch.testable.mjs");
-
-    fs.writeFileSync(
-      mockPiAiPath,
-      [
-        'export class AssistantMessageEventStream {}',
-        'export function getEnvApiKey() { return ""; }',
-        'export function registerApiProvider(provider, sourceId) {',
-        '  globalThis.__providerCalls = globalThis.__providerCalls || [];',
-        '  globalThis.__providerCalls.push({ provider, sourceId });',
-        '}',
-        'export function supportsXhigh() { return false; }',
-      ].join("\n"),
-      "utf8",
-    );
-
-    const originalSource = fs.readFileSync(sourcePath, "utf8");
-    const transformedSource = originalSource
-      .replace('"./pi-ai-compat.js"', JSON.stringify(pathToFileURL(mockPiAiPath).href))
-      .replace('"./openai-search-display.js"', JSON.stringify(pathToFileURL(searchDisplayPath).href))
-      .replace('"./openai-native-search.js"', JSON.stringify(pathToFileURL(nativeSearchPath).href))
-      .replace('"./gsd-pi-compat.js"', JSON.stringify(pathToFileURL(compatPath).href));
-
-    fs.writeFileSync(transformedModulePath, transformedSource, "utf8");
     delete globalThis.__providerCalls;
-
-    const patchModule = await import(pathToFileURL(transformedModulePath).href);
-    patchModule.registerOpenAIResponsesDisplayPatch();
-    patchModule.registerOpenAIResponsesDisplayPatch();
+    const providerModule = await loadTestableProviderModule(tempDir);
+    providerModule.registerOpenAIResponsesDisplayPatch();
+    providerModule.registerOpenAIResponsesDisplayPatch();
 
     assert.equal(globalThis.__providerCalls.length, 1);
     assert.equal(globalThis.__providerCalls[0].provider.api, "openai-responses");
@@ -2057,42 +2029,39 @@ test("registerOpenAIResponsesDisplayPatch is idempotent on repeated calls", asyn
   }
 });
 
-test("resolveGsdPiRoot auto-detects installed gsd runtime without GSD_BIN_PATH", (t) => {
-  if (!spawnSync("sh", ["-lc", "command -v gsd"], { encoding: "utf8" }).stdout.trim()) {
-    t.skip("gsd binary is required for runtime auto-discovery test");
-    return;
-  }
-
-  const originalGsdBinPath = process.env.GSD_BIN_PATH;
-  resetGsdPiCompatCache();
-  delete process.env.GSD_BIN_PATH;
+test("resolvePiRuntimeRoot auto-detects installed standalone pi runtime", () => {
+  const originalPiBinPath = process.env.PI_BIN_PATH;
+  resetPiRuntimeCache();
+  delete process.env.PI_BIN_PATH;
 
   try {
-    const root = resolveGsdPiRoot();
+    const root = resolvePiRuntimeRoot();
     assert.equal(fs.existsSync(root), true);
-    assert.equal(path.basename(root), "gsd-pi");
+    assert.equal(path.basename(root), "pi-coding-agent");
   } finally {
-    resetGsdPiCompatCache();
-    if (originalGsdBinPath == null) {
-      delete process.env.GSD_BIN_PATH;
+    resetPiRuntimeCache();
+    if (originalPiBinPath == null) {
+      delete process.env.PI_BIN_PATH;
     } else {
-      process.env.GSD_BIN_PATH = originalGsdBinPath;
+      process.env.PI_BIN_PATH = originalPiBinPath;
     }
   }
 });
 
 test("loadExtensions imports extension without hard failure", async (t) => {
-  let gsdRoot;
+  let runtimeRoot;
   try {
-    gsdRoot = resolveGsdPiRoot();
+    runtimeRoot = resolvePiRuntimeRoot();
   } catch (error) {
     t.skip(error instanceof Error ? error.message : String(error));
     return;
   }
 
-  const piAiModule = await import(pathToFileURL(path.join(gsdRoot, "packages/pi-ai/dist/index.js")).href);
+  const piAiModule = await import(
+    pathToFileURL(path.join(runtimeRoot, "node_modules/@mariozechner/pi-ai/dist/index.js")).href,
+  );
   const loaderModule = await import(
-    pathToFileURL(path.join(gsdRoot, "packages/pi-coding-agent/dist/core/extensions/loader.js")).href
+    pathToFileURL(path.join(runtimeRoot, "dist/core/extensions/loader.js")).href,
   );
 
   piAiModule.resetApiProviders();
@@ -2119,7 +2088,7 @@ test("proof helper resolves provider api key via standalone pi auth api", async 
   assert.equal(apiKey, "pi-api-key");
 });
 
-test("proof helper resolves provider api key via legacy gsd auth api", async () => {
+test("proof helper resolves provider api key via credential-based auth api", async () => {
   const authStorage = {
     getCredentialsForProvider(provider) {
       assert.equal(provider, "openai");
@@ -2538,28 +2507,25 @@ test(
       t.skip("OPENAI_API_KEY is required for live OpenAI regression");
       return;
     }
-    if (!process.env.GSD_BIN_PATH) {
-      t.skip("GSD_BIN_PATH is required for gsd-pi live regression");
-      return;
-    }
-
     const childScript = String.raw`
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 const repoRoot = process.cwd();
-const gsdRoot = path.resolve(path.dirname(process.env.GSD_BIN_PATH), "..", "lib", "node_modules", "gsd-pi");
+const piBinPath = process.env.PI_BIN_PATH;
+const runtimeRoot = path.resolve(path.dirname(piBinPath), "..", "lib", "node_modules", "@mariozechner", "pi-coding-agent");
 const tempDir = fs.mkdtempSync(path.join(repoRoot, ".tmp-pi-openai-search-live-"));
 const sessionDir = path.join(tempDir, "sessions");
-const agentDir = "/home/spike/.gsd/agent";
+const agentDir = process.env.PI_AGENT_DIR || path.join(os.homedir(), ".pi", "agent");
 
-const { DefaultResourceLoader } = await import(pathToFileURL(path.join(gsdRoot, "packages/pi-coding-agent/dist/core/resource-loader.js")).href);
-const { SettingsManager } = await import(pathToFileURL(path.join(gsdRoot, "packages/pi-coding-agent/dist/core/settings-manager.js")).href);
-const { AuthStorage } = await import(pathToFileURL(path.join(gsdRoot, "packages/pi-coding-agent/dist/core/auth-storage.js")).href);
-const { ModelRegistry } = await import(pathToFileURL(path.join(gsdRoot, "packages/pi-coding-agent/dist/core/model-registry.js")).href);
-const { SessionManager } = await import(pathToFileURL(path.join(gsdRoot, "packages/pi-coding-agent/dist/core/session-manager.js")).href);
-const { createAgentSession } = await import(pathToFileURL(path.join(gsdRoot, "packages/pi-coding-agent/dist/core/sdk.js")).href);
+const { DefaultResourceLoader } = await import(pathToFileURL(path.join(runtimeRoot, "dist/core/resource-loader.js")).href);
+const { SettingsManager } = await import(pathToFileURL(path.join(runtimeRoot, "dist/core/settings-manager.js")).href);
+const { AuthStorage } = await import(pathToFileURL(path.join(runtimeRoot, "dist/core/auth-storage.js")).href);
+const { ModelRegistry } = await import(pathToFileURL(path.join(runtimeRoot, "dist/core/model-registry.js")).href);
+const { SessionManager } = await import(pathToFileURL(path.join(runtimeRoot, "dist/core/session-manager.js")).href);
+const { createAgentSession } = await import(pathToFileURL(path.join(runtimeRoot, "dist/core/sdk.js")).href);
 
 try {
   const settingsManager = SettingsManager.create(repoRoot, agentDir);
@@ -2618,6 +2584,7 @@ process.exit(0);
       cwd: process.cwd(),
       env: {
         ...process.env,
+        PI_BIN_PATH: process.env.PI_BIN_PATH || spawnSync("sh", ["-lc", "command -v pi"], { encoding: "utf8" }).stdout.trim(),
         PI_OPENAI_NATIVE_SEARCH: "1",
         PI_OPENAI_NATIVE_SEARCH_MODE: "live",
       },

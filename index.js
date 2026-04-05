@@ -13,7 +13,7 @@ import {
 } from "./src/openai-responses-display-patch.js";
 import { registerInteractiveSearchOrderPatch } from "./src/openai-interactive-search-order-patch.js";
 import { registerTruthfulInteractiveWebSearchPatch } from "./src/openai-tool-execution-web-search-patch.js";
-import { registerCompatLayer } from "./src/gsd-pi-compat.js";
+import { registerCompatLayer } from "./src/pi-runtime.js";
 
 const NATIVE_SEARCH_STATUS_KEY = "openai-native-web-search";
 let uiCompatRegistrationPromise;
