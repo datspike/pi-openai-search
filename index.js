@@ -11,8 +11,10 @@ import {
   buildPatchedOpenAIResponsesProviderConfig,
   registerOpenAIResponsesDisplayPatch,
 } from "./src/openai-responses-display-patch.js";
+import { registerInteractiveSearchOrderPatch } from "./src/openai-interactive-search-order-patch.js";
 import { registerTruthfulInteractiveWebSearchPatch } from "./src/openai-tool-execution-web-search-patch.js";
 
+await registerInteractiveSearchOrderPatch();
 await registerTruthfulInteractiveWebSearchPatch();
 
 const NATIVE_SEARCH_STATUS_KEY = "openai-native-web-search";

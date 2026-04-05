@@ -216,19 +216,35 @@ export function summarizeSearchInput(action) {
 
   const summary = { type: action.type || "search" };
 
+  const nestedInput = action.input && typeof action.input === "object" ? action.input : undefined;
   const directQuery = typeof action.query === "string" ? action.query : undefined;
   const searchQuery = typeof action.search_query === "string" ? action.search_query : undefined;
   const queryText = typeof action.query_text === "string" ? action.query_text : undefined;
+  const nestedQuery = typeof nestedInput?.query === "string" ? nestedInput.query : undefined;
+  const nestedSearchQuery = typeof nestedInput?.search_query === "string" ? nestedInput.search_query : undefined;
+  const nestedQueryText = typeof nestedInput?.query_text === "string" ? nestedInput.query_text : undefined;
   const inputText = typeof action.input === "string" ? action.input : undefined;
   const promptText = typeof action.prompt === "string" ? action.prompt : undefined;
 
-  if (directQuery || searchQuery || queryText || inputText || promptText) {
-    summary.query = directQuery || searchQuery || queryText || inputText || promptText;
+  if (directQuery || searchQuery || queryText || nestedQuery || nestedSearchQuery || nestedQueryText || inputText || promptText) {
+    summary.query =
+      directQuery ||
+      searchQuery ||
+      queryText ||
+      nestedQuery ||
+      nestedSearchQuery ||
+      nestedQueryText ||
+      inputText ||
+      promptText;
   }
   if (Array.isArray(action.queries) && action.queries.length > 0) {
     summary.queries = action.queries;
   } else if (Array.isArray(action.search_queries) && action.search_queries.length > 0) {
     summary.queries = action.search_queries;
+  } else if (Array.isArray(nestedInput?.queries) && nestedInput.queries.length > 0) {
+    summary.queries = nestedInput.queries;
+  } else if (Array.isArray(nestedInput?.search_queries) && nestedInput.search_queries.length > 0) {
+    summary.queries = nestedInput.search_queries;
   }
   if (action.url) {
     summary.url = action.url;

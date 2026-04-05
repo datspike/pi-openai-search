@@ -350,7 +350,10 @@ function compactAssistantEventBlock(block, eventType) {
       ? {
           type: block.input.type,
           query: block.input.query,
+          queries: block.input.queries,
           url: block.input.url,
+          page_url: block.input.page_url,
+          pattern: block.input.pattern,
           status: block.input.status,
         }
       : block.input;
@@ -450,26 +453,7 @@ export function enrichOutputFromCompletedResponse(output, response, state, strea
 
   for (const item of responseOutput) {
     if (item?.type === "web_search_call") {
-      const toolBlockIndex = state.searchToolBlockById.get(item.id);
-      if (toolBlockIndex == null) {
-        output.content.push({
-          type: "serverToolUse",
-          id: item.id,
-          name: "web_search",
-          input: summarizeSearchInput(item.action),
-        });
-        state.searchCallIds.add(item.id);
-        state.searchToolBlockById.set(item.id, output.content.length - 1);
-        stream.push({
-          type: "server_tool_use",
-          ...buildAssistantEventContext(output, output.content.length - 1, compactMode, "server_tool_use"),
-        });
-      } else {
-        const existingToolBlock = output.content[toolBlockIndex];
-        if (existingToolBlock?.type === "serverToolUse") {
-          existingToolBlock.input = summarizeSearchInput(item.action);
-        }
-      }
+      upsertSearchToolUseBlock(output, state, item, stream, compactMode);
 
       const perCallSources = searchCallSourcesById.get(item.id) || [];
       const resultSources = item.id === terminalSearchCallId
@@ -515,6 +499,52 @@ export function enrichOutputFromCompletedResponse(output, response, state, strea
     const mergedSources = itemAnnotationSources.length > 0 ? itemAnnotationSources : allSources;
     block.text = appendStructuredCitations(block.text, mergedSources);
   }
+}
+
+/**
+ * Upsert factual serverToolUse block для native web_search.
+ *
+ * @param {any} output Partial assistant message.
+ * @param {{searchCallIds: Set<string>, searchToolBlockById: Map<string, number>}} state Служебное состояние.
+ * @param {any} item Один web_search_call item.
+ * @param {any} stream Stream assistant events.
+ * @param {boolean} compactMode Флаг compact stdout path.
+ * @returns {number} Индекс serverToolUse блока.
+ */
+export function upsertSearchToolUseBlock(output, state, item, stream, compactMode = false) {
+  const nextInput = summarizeSearchInput(item.action);
+  const toolBlockIndex = state.searchToolBlockById.get(item.id);
+
+  if (toolBlockIndex == null) {
+    output.content.push({
+      type: "serverToolUse",
+      id: item.id,
+      name: "web_search",
+      input: nextInput,
+    });
+    state.searchCallIds.add(item.id);
+    state.searchToolBlockById.set(item.id, output.content.length - 1);
+    stream.push({
+      type: "server_tool_use",
+      ...buildAssistantEventContext(output, output.content.length - 1, compactMode, "server_tool_use"),
+    });
+    return output.content.length - 1;
+  }
+
+  const existingToolBlock = output.content[toolBlockIndex];
+  if (existingToolBlock?.type === "serverToolUse") {
+    const previousInput = JSON.stringify(existingToolBlock.input ?? {});
+    const updatedInput = JSON.stringify(nextInput);
+    existingToolBlock.input = nextInput;
+    if (previousInput !== updatedInput) {
+      stream.push({
+        type: "server_tool_use",
+        ...buildAssistantEventContext(output, toolBlockIndex, compactMode, "server_tool_use"),
+      });
+    }
+  }
+
+  return toolBlockIndex;
 }
 
 /**
@@ -717,6 +747,7 @@ async function processResponsesStreamWithSearchDisplay(openaiStream, output, str
         currentBlock = null;
         stream.push({ type: "toolcall_end", ...currentEventContext("toolcall_end"), toolCall });
       } else if (item.type === "web_search_call") {
+        upsertSearchToolUseBlock(output, state, item, stream, compactStreamEvents);
         const resultBlockIndex = state.searchResultBlockById.get(item.id);
         if (resultBlockIndex == null) {
           output.content.push({

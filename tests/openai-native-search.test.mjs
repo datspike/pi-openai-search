@@ -25,6 +25,9 @@ import {
   summarizeSearchInput,
 } from "../src/openai-search-display.js";
 import {
+  applyInteractiveSearchOrderPatch,
+} from "../src/openai-interactive-search-order-patch.js";
+import {
   applyTruthfulInteractiveWebSearchPatch,
   registerTruthfulInteractiveWebSearchPatch,
 } from "../src/openai-tool-execution-web-search-patch.js";
@@ -45,6 +48,7 @@ async function loadTestableExtensionModule(tempDir, { fsPromisesLines, nativeSea
   const mockFsPromisesPath = path.join(tempDir, "fs-promises-mock.js");
   const mockNativeSearchPath = path.join(tempDir, "openai-native-search-mock.js");
   const mockDisplayPatchPath = path.join(tempDir, "openai-responses-display-patch-mock.js");
+  const mockInteractiveSearchOrderPatchPath = path.join(tempDir, "openai-interactive-search-order-patch-mock.js");
   const mockToolExecutionPatchPath = path.join(tempDir, "openai-tool-execution-web-search-patch-mock.js");
   const transformedModulePath = path.join(tempDir, "index.testable.mjs");
 
@@ -61,6 +65,11 @@ async function loadTestableExtensionModule(tempDir, { fsPromisesLines, nativeSea
     "utf8",
   );
   fs.writeFileSync(
+    mockInteractiveSearchOrderPatchPath,
+    ['export async function registerInteractiveSearchOrderPatch() {}'].join("\n"),
+    "utf8",
+  );
+  fs.writeFileSync(
     mockToolExecutionPatchPath,
     ['export async function registerTruthfulInteractiveWebSearchPatch() {}'].join("\n"),
     "utf8",
@@ -74,6 +83,10 @@ async function loadTestableExtensionModule(tempDir, { fsPromisesLines, nativeSea
     .replace(
       '"./src/openai-responses-display-patch.js"',
       JSON.stringify(pathToFileURL(mockDisplayPatchPath).href),
+    )
+    .replace(
+      '"./src/openai-interactive-search-order-patch.js"',
+      JSON.stringify(pathToFileURL(mockInteractiveSearchOrderPatchPath).href),
     )
     .replace(
       '"./src/openai-tool-execution-web-search-patch.js"',
@@ -107,6 +120,14 @@ async function loadTestableDisplayPatchModule(tempDir) {
     .replace('"./openai-search-display.js"', JSON.stringify(pathToFileURL(searchDisplayPath).href));
 
   fs.writeFileSync(transformedModulePath, transformedSource, "utf8");
+  return import(pathToFileURL(transformedModulePath).href);
+}
+
+async function loadTestableInteractiveSearchOrderPatchModule(tempDir) {
+  const sourcePath = fileURLToPath(new URL("../src/openai-interactive-search-order-patch.js", import.meta.url));
+  const transformedModulePath = path.join(tempDir, "openai-interactive-search-order-patch.testable.mjs");
+
+  fs.writeFileSync(transformedModulePath, fs.readFileSync(sourcePath, "utf8"), "utf8");
   return import(pathToFileURL(transformedModulePath).href);
 }
 
@@ -424,6 +445,318 @@ test("summarizeSearchInput reads defensive provider query variants", () => {
       query: "latest openai announcements",
     },
   );
+
+  assert.deepEqual(
+    summarizeSearchInput({
+      type: "search",
+      input: {
+        query: "openai responses web_search",
+        search_queries: ["openai responses web_search", "gsd native search"],
+      },
+    }),
+    {
+      type: "search",
+      query: "openai responses web_search",
+      queries: ["openai responses web_search", "gsd native search"],
+    },
+  );
+});
+
+test("applyInteractiveSearchOrderPatch rejects incompatible runtime shape", () => {
+  assert.throws(
+    () =>
+      applyInteractiveSearchOrderPatch(
+        class {},
+        class {},
+        class {},
+        { Spacer: class {}, Text: class {}, Markdown: class {}, theme: {} },
+      ),
+    /AssistantMessageComponent/,
+  );
+});
+
+test("interactive search-order patch keeps native web search inline in chronological order", async () => {
+  const tempDir = fs.mkdtempSync(path.join(process.cwd(), ".tmp-pi-openai-search-inline-order-test-"));
+
+  try {
+    const patchModule = await loadTestableInteractiveSearchOrderPatchModule(tempDir);
+
+    class MockContainer {
+      constructor() {
+        this.children = [];
+      }
+
+      addChild(child) {
+        this.children.push(child);
+      }
+
+      clear() {
+        this.children = [];
+      }
+    }
+
+    class MockSpacer {
+      constructor(size) {
+        this.kind = "spacer";
+        this.size = size;
+      }
+    }
+
+    class MockText {
+      constructor(text) {
+        this.kind = "text";
+        this.text = text;
+      }
+    }
+
+    class MockMarkdown {
+      constructor(text) {
+        this.kind = "markdown";
+        this.text = text;
+      }
+    }
+
+    class MockAssistantMessageComponent {
+      constructor(message, hideThinkingBlock = false, markdownTheme = {}, timestampFormat = "iso") {
+        this.hideThinkingBlock = hideThinkingBlock;
+        this.markdownTheme = markdownTheme;
+        this.timestampFormat = timestampFormat;
+        this.contentContainer = new MockContainer();
+        if (message) {
+          this.updateContent(message);
+        }
+      }
+
+      updateContent(message) {
+        this.lastMessage = message;
+        this.contentContainer.clear();
+        this.contentContainer.addChild({ kind: "fallback", message });
+      }
+
+      invalidate() {
+        if (this.lastMessage) {
+          this.updateContent(this.lastMessage);
+        }
+      }
+    }
+
+    class MockToolExecutionComponent {
+      constructor(toolName, args) {
+        this.kind = "tool";
+        this.toolName = toolName;
+        this.args = args;
+        this.result = undefined;
+        this.expanded = false;
+      }
+
+      setExpanded(expanded) {
+        this.expanded = expanded;
+      }
+
+      updateArgs(args) {
+        this.args = args;
+      }
+
+      updateResult(result) {
+        this.result = result;
+      }
+
+      setArgsComplete() {
+        this.argsComplete = true;
+      }
+    }
+
+    class MockInteractiveMode {
+      constructor() {
+        this.ui = { requestRender() {} };
+        this.chatContainer = new MockContainer();
+        this.pendingTools = new Map();
+        this.hideThinkingBlock = false;
+        this.toolOutputExpanded = false;
+        this.settingsManager = {
+          getShowImages() {
+            return true;
+          },
+          getTimestampFormat() {
+            return "iso";
+          },
+        };
+        this.session = { retryAttempt: 0 };
+        this.footer = { invalidate() {} };
+      }
+
+      getMarkdownThemeWithSettings() {
+        return {};
+      }
+
+      getRegisteredToolDefinition() {
+        return undefined;
+      }
+
+      formatWebSearchResult(content) {
+        if (Array.isArray(content)) {
+          return content.map((item) => item.url).join("\n");
+        }
+        return "complete";
+      }
+
+      updateEditorBorderColor() {}
+
+      addMessageToChat(message) {
+        if (message.role === "assistant") {
+          const component = new MockAssistantMessageComponent(
+            message,
+            this.hideThinkingBlock,
+            this.getMarkdownThemeWithSettings(),
+            this.settingsManager.getTimestampFormat(),
+          );
+          this.chatContainer.addChild(component);
+          return;
+        }
+
+        this.chatContainer.addChild({ kind: "message", message });
+      }
+
+      async handleEvent(event) {
+        if (event.type === "message_start" && event.message.role === "assistant") {
+          this.streamingComponent = new MockAssistantMessageComponent(
+            undefined,
+            this.hideThinkingBlock,
+            this.getMarkdownThemeWithSettings(),
+            this.settingsManager.getTimestampFormat(),
+          );
+          this.streamingMessage = event.message;
+          this.chatContainer.addChild(this.streamingComponent);
+          this.streamingComponent.updateContent(this.streamingMessage);
+          return;
+        }
+
+        if (event.type === "message_end" && event.message.role === "assistant" && this.streamingComponent) {
+          this.streamingMessage = event.message;
+          this.streamingComponent.updateContent(this.streamingMessage);
+          this.streamingComponent = undefined;
+          this.streamingMessage = undefined;
+        }
+      }
+
+      renderSessionContext() {
+        throw new Error("original renderSessionContext should be patched");
+      }
+    }
+
+    patchModule.applyInteractiveSearchOrderPatch(
+      MockAssistantMessageComponent,
+      MockToolExecutionComponent,
+      MockInteractiveMode,
+      {
+        Spacer: MockSpacer,
+        Text: MockText,
+        Markdown: MockMarkdown,
+        theme: {
+          fg(_name, text) {
+            return text;
+          },
+          italic(text) {
+            return text;
+          },
+        },
+        formatTimestamp() {
+          return "2026-04-05T00:00:00.000Z";
+        },
+      },
+    );
+
+    const host = new MockInteractiveMode();
+    await host.handleEvent({ type: "message_start", message: { role: "assistant", content: [] } });
+
+    const searchingMessage = {
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "first thought" },
+        { type: "serverToolUse", id: "ws_1", name: "web_search", input: { type: "search" } },
+        { type: "thinking", thinking: "second thought" },
+      ],
+    };
+
+    await host.handleEvent({ type: "message_update", message: searchingMessage });
+
+    const firstRenderKinds = host.streamingComponent.contentContainer.children.map((child) => child.kind);
+    assert.deepEqual(firstRenderKinds, ["spacer", "markdown", "spacer", "tool", "markdown"]);
+    assert.equal(host.chatContainer.children.length, 1);
+
+    const partialTool = host.streamingComponent.contentContainer.children.find((child) => child.kind === "tool");
+    assert.deepEqual(partialTool.args, { type: "search" });
+    assert.equal(partialTool.result, undefined);
+
+    const completedMessage = {
+      role: "assistant",
+      stopReason: "stop",
+      timestamp: 1,
+      content: [
+        { type: "thinking", thinking: "first thought" },
+        {
+          type: "serverToolUse",
+          id: "ws_1",
+          name: "web_search",
+          input: { type: "search", query: "openai news" },
+        },
+        { type: "thinking", thinking: "second thought" },
+        {
+          type: "webSearchResult",
+          toolUseId: "ws_1",
+          content: [{ type: "web_search_result", title: "OpenAI", url: "https://openai.com/news" }],
+        },
+        { type: "text", text: "final answer" },
+      ],
+    };
+
+    await host.handleEvent({ type: "message_update", message: completedMessage });
+
+    const secondRenderKinds = host.streamingComponent.contentContainer.children.map((child) => child.kind);
+    assert.deepEqual(secondRenderKinds, ["spacer", "markdown", "spacer", "tool", "markdown", "spacer", "markdown", "text"]);
+
+    const completedTool = host.streamingComponent.contentContainer.children.find((child) => child.kind === "tool");
+    assert.equal(completedTool.args.query, "openai news");
+    assert.deepEqual(completedTool.result, {
+      content: [{ type: "text", text: "https://openai.com/news" }],
+      isError: false,
+    });
+
+    const replayHost = new MockInteractiveMode();
+    replayHost.renderSessionContext({
+      messages: [completedMessage],
+    });
+
+    assert.equal(replayHost.chatContainer.children.length, 1);
+    const replayAssistant = replayHost.chatContainer.children[0];
+    assert.deepEqual(
+      replayAssistant.contentContainer.children.map((child) => child.kind),
+      ["spacer", "markdown", "spacer", "tool", "markdown", "spacer", "markdown", "text"],
+    );
+
+    const failedMessage = {
+      role: "assistant",
+      stopReason: "error",
+      errorMessage: "provider timeout",
+      content: [
+        {
+          type: "serverToolUse",
+          id: "ws_2",
+          name: "web_search",
+          input: { type: "search" },
+        },
+      ],
+    };
+
+    await host.handleEvent({ type: "message_update", message: failedMessage });
+    const failedTool = host.streamingComponent.contentContainer.children.find((child) => child.kind === "tool");
+    assert.deepEqual(failedTool.result, {
+      content: [{ type: "text", text: "provider timeout" }],
+      isError: true,
+    });
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
 });
 
 test("applyTruthfulInteractiveWebSearchPatch rejects incompatible runtime shape", () => {
@@ -626,6 +959,69 @@ test("getFactualSearchLifecycleUpdate ignores malformed and non-factual inputs",
     }),
     null,
   );
+});
+
+test("upsertSearchToolUseBlock emits update when web search query arrives on output_item.done", async () => {
+  const tempDir = fs.mkdtempSync(path.join(process.cwd(), ".tmp-pi-openai-search-upsert-search-tool-test-"));
+
+  try {
+    const patchModule = await loadTestableDisplayPatchModule(tempDir);
+  const output = {
+    role: "assistant",
+    content: [
+      {
+        type: "serverToolUse",
+        id: "ws_1",
+        name: "web_search",
+        input: { type: "search" },
+      },
+    ],
+  };
+  const state = {
+    searchCallIds: new Set(["ws_1"]),
+    searchToolBlockById: new Map([["ws_1", 0]]),
+  };
+  const streamEvents = [];
+  const stream = {
+    push(event) {
+      streamEvents.push(event);
+    },
+  };
+
+  patchModule.upsertSearchToolUseBlock(
+    output,
+    state,
+    {
+      type: "web_search_call",
+      id: "ws_1",
+      action: {
+        type: "search",
+        query: "openai news",
+      },
+    },
+    stream,
+    false,
+  );
+
+  assert.deepEqual(output.content[0].input, {
+    type: "search",
+    query: "openai news",
+  });
+  assert.equal(streamEvents.length, 1);
+  assert.equal(streamEvents[0].type, "server_tool_use");
+  assert.equal(streamEvents[0].contentIndex, 0);
+  assert.deepEqual(streamEvents[0].partial.content[0], {
+    type: "serverToolUse",
+    id: "ws_1",
+    name: "web_search",
+    input: {
+      type: "search",
+      query: "openai news",
+    },
+  });
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
 });
 
 test("extension registers session-safe openai provider override", async () => {

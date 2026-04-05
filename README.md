@@ -32,6 +32,8 @@ POC extension для `gsd` / `pi`, который включает нативн�
   - `serverToolUse` для `web_search_call`
   - `webSearchResult` для завершённого native search
   - добавленные в текст citations, если OpenAI вернул structured annotations, которых ещё нет в тексте
+- патчит interactive/replay renderer `gsd-pi`, чтобы native `web_search` оставался отдельным structured tool block, но стоял в хронологическом порядке внутри assistant turn, а не прилипал в конец чата
+- truthful query label обновляется из реального provider payload, если query появляется позже в completed response; если query нет, UI честно показывает нейтральный label без synthetic fallback
 
 ## Ограничения POC
 
