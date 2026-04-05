@@ -18,7 +18,6 @@ export const JSONL_VERIFIER_MAX_BUFFER = 1024 * 1024;
 export const JSONL_VERIFIER_TIMEOUT_MS = 240_000;
 export const SEARCH_PROOF_INCLUDE_FIELDS = [
   "web_search_call.action.sources",
-  "web_search_call.results",
 ];
 
 export const SEARCH_PROOF_SCENARIOS = {
@@ -605,7 +604,7 @@ export function classifyVerifierJsonl(events, scenario) {
  * Сводка raw Responses payload.
  *
  * @param {any} response Полный raw Responses response.
- * @returns {{outputTypes: string[], searchCalls: Array<{id: string, actionType: string, actionSourceCount: number, resultSourceCount: number, rawResultCount: number}>, annotationSourceCount: number, inlineSourceCount: number, totalStructuredSourceCount: number, structuredSeams: string[]}} Нормализованная сводка.
+ * @returns {{outputTypes: string[], searchCalls: Array<{id: string, actionType: string, actionSourceCount: number, resultSourceCount: number, rawResultCount: number}>, annotationSourceCount: number, inlineSourceCount: number, totalStructuredSourceCount: number, documentedStructuredSourceCount: number, documentedStructuredSeams: string[], opportunisticStructuredSeams: string[]}} Нормализованная сводка.
  */
 export function summarizeRawResponse(response) {
   if (!Array.isArray(response?.output)) {
@@ -642,15 +641,16 @@ export function summarizeRawResponse(response) {
   );
   const totalActionSourceCount = perCall.reduce((sum, item) => sum + item.actionSourceCount, 0);
   const totalResultSourceCount = perCall.reduce((sum, item) => sum + item.resultSourceCount, 0);
-  const structuredSeams = [];
+  const documentedStructuredSeams = [];
+  const opportunisticStructuredSeams = [];
   if (totalActionSourceCount > 0) {
-    structuredSeams.push("action.sources");
-  }
-  if (totalResultSourceCount > 0) {
-    structuredSeams.push("results");
+    documentedStructuredSeams.push("action.sources");
   }
   if (annotationSources.length > 0) {
-    structuredSeams.push("annotations");
+    documentedStructuredSeams.push("annotations");
+  }
+  if (totalResultSourceCount > 0) {
+    opportunisticStructuredSeams.push("results");
   }
 
   return {
@@ -666,7 +666,9 @@ export function summarizeRawResponse(response) {
     annotationSourceCount: annotationSources.length,
     inlineSourceCount: inlineSources.length,
     totalStructuredSourceCount: totalActionSourceCount + totalResultSourceCount + annotationSources.length,
-    structuredSeams,
+    documentedStructuredSourceCount: totalActionSourceCount + annotationSources.length,
+    documentedStructuredSeams,
+    opportunisticStructuredSeams,
   };
 }
 
@@ -707,14 +709,16 @@ export function classifyRawResponse(response, scenario) {
     };
   }
 
-  if (summary.totalStructuredSourceCount === 0) {
+  if (summary.documentedStructuredSourceCount === 0) {
     return {
       scenario,
       verdict: "blocker",
       reason:
-        summary.inlineSourceCount > 0
-          ? "Raw scenario A вернул только inline URLs в output_text без structured seams."
-          : "Raw scenario A не содержит structured URLs ни в action.sources, ни в results, ни в annotations.",
+        summary.structuredSourceCounts.resultSources > 0
+          ? "Raw scenario A вернул только opportunistic results seam без документированных structured URLs."
+          : summary.inlineSourceCount > 0
+            ? "Raw scenario A вернул только inline URLs в output_text без documented structured seams."
+            : "Raw scenario A не содержит documented structured URLs ни в action.sources, ни в annotations.",
       summary,
     };
   }
@@ -722,7 +726,7 @@ export function classifyRawResponse(response, scenario) {
   return {
     scenario,
     verdict: "pass",
-    reason: `Raw scenario A содержит structured seams: ${summary.structuredSeams.join(", ")}.`,
+    reason: `Raw scenario A содержит documented structured seams: ${summary.documentedStructuredSeams.join(", ")}.`,
     summary,
   };
 }

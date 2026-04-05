@@ -24,7 +24,7 @@ POC extension для `gsd` / `pi`, который включает нативн�
   - `search-the-web`
   - `search_and_read`
   - `google_search`
-- добавляет `include: ["web_search_call.action.sources", "web_search_call.results"]`
+- добавляет `include: ["web_search_call.action.sources"]`
 - выставляет `tool_choice = "auto"`, если поле не задано
 - выставляет `parallel_tool_calls = true`, если поле не задано
 - поддерживает live/cached режим и базовые фильтры через env
@@ -41,7 +41,8 @@ POC extension для `gsd` / `pi`, который включает нативн�
 
 - `openai-codex-responses` пока без аналогичного display patch,
 - `azure-openai-responses` пока без аналогичного display patch,
-- если upstream не вернёт structured `action.sources`, `results` или annotations, extension не выдумает их сам.
+- если upstream не вернёт documented `action.sources` или annotations, extension не выдумает их сам.
+- если provider/proxy дополнительно вернёт `results`, extension сможет прочитать их как defensive seam, но milestone closure не опирается на этот недокументированный path.
 
 То есть это уже не только payload injection, а рабочий runtime patch для основного OpenAI Responses сценария, но ещё не полный upstream-quality клон UX Codex.
 
@@ -184,7 +185,7 @@ EXTENSION_PATH="$PWD/index.js"
 
 ### 1. Raw Responses probe
 
-Показывает, есть ли structured URLs уже в upstream payload через `web_search_call.action.sources`, `web_search_call.results` или message annotations.
+Показывает, есть ли documented structured URLs уже в upstream payload через `web_search_call.action.sources` или message annotations. Если provider/proxy внезапно вернёт `web_search_call.results`, probe покажет это как opportunistic seam, но не зачтёт за documented closure.
 
 ```bash
 node scripts/openai-search-raw-probe.mjs \
@@ -234,9 +235,8 @@ node scripts/verify-openai-search-proof.mjs \
 
 Оба script запускаются без operational errors, а затем:
 
-- raw probe показывает хотя бы один truthful structured seam для scenario A:
+- raw probe показывает хотя бы один documented truthful structured seam для scenario A:
   - `action.sources`, или
-  - `results`, или
   - `annotations`
 - verifier harness проходит exact 1 MiB contract без `ENOBUFS`
 - scenario A содержит финальные factual `serverToolUse` / `webSearchResult` blocks с сохранённым `toolUseId` separation
@@ -251,7 +251,7 @@ Scripts отработали штатно, но truthful closure для scenario
 
 Типичные blocker signatures:
 
-- raw probe вернул `verdict: blocker` и показал, что structured URLs отсутствуют уже в raw payload
+- raw probe вернул `verdict: blocker` и показал, что documented structured URLs отсутствуют уже в raw payload
 - verifier закончил scenario A только sentinel `web_search_tool_result_complete` без structured URLs
 - scenario B остаётся чистым, то есть локальный negative path не сломан
 
@@ -274,20 +274,20 @@ Proof нельзя считать достоверным, потому что у
 
 ### Актуальный blocker baseline (2026-04-05, GMT+3)
 
-Свежий финальный прогон S04/T02 на текущем worktree подтвердил, что локальный runtime остаётся в truthful blocker-ветке и новый mapper churn не нужен, пока upstream не откроет structured seam.
+Свежий финальный прогон S05/T02 на текущем worktree подтвердил, что локальный runtime остаётся в truthful blocker-ветке под policy D018 и новый mapper churn не нужен, пока upstream не откроет documented structured seam.
 
 - `npm test`
   - full suite: `pass`
 - `node scripts/openai-search-raw-probe.mjs --extension "$PWD/index.js" --scenario A --scenario B`
   - `overallVerdict: blocker`
-  - scenario A: `searchCallCount: 1`, `actionSources: 0`, `resultSources: 0`, `annotationSources: 0`, `inlineSources: 2`
+  - scenario A: `searchCallCount: 1`, `actionSources: 0`, `resultSources: 0`, `annotationSources: 0`, `inlineSources: 2`, `documentedStructuredSourceCount: 0`
   - scenario B: `pass`, search activity отсутствует
 - `node scripts/verify-openai-search-proof.mjs --extension "$PWD/index.js" --scenario A --scenario B`
   - `overallVerdict: blocker`
-  - scenario A: `serverToolUse/webSearchResult` separation сохранён, `finalServerToolUseCount >= 1`, `finalWebSearchResultCount == finalServerToolUseCount`, `resultBlockCount == sentinelCount`, `garbageUrlDetected: false`
+  - scenario A: `serverToolUse/webSearchResult` separation сохранён, `finalServerToolUseCount: 3`, `finalWebSearchResultCount: 3`, `resultBlockCount: 3`, `sentinelCount: 3`, `garbageUrlDetected: false`
   - scenario B: `pass`, `finalWebSearchResultCount: 0`, `garbageUrlDetected: false`
 
-Если свежий rerun совпадает с этой сигнатурой, это именно `blocker`, а не локальный `fail`: full suite зелёный, proof harness работает, negative path чистый, но provider по-прежнему не возвращает structured URLs для scenario A. До появления нового provider-backed seam runtime не расширяем и text-derived canonical sources не возвращаем.
+Если свежий rerun совпадает с этой сигнатурой, это именно `blocker`, а не локальный `fail`: full suite зелёный, proof harness работает, negative path чистый, но provider по-прежнему не возвращает documented structured URLs для scenario A. До появления нового provider-backed seam runtime не расширяем и text-derived canonical sources не возвращаем.
 
 ## tmux / human-attended UAT checklist
 
@@ -317,12 +317,29 @@ PI_OPENAI_NATIVE_SEARCH_MODE=live \
 
 ### Ограничение auto-mode
 
-В auto-mode нет human-attended tmux confirmation. В этом режиме обязательный минимум такой:
+В auto-mode нет fresh human-attended tmux confirmation для текущего финального состояния worktree. В этом режиме обязательный минимум такой:
 
 - прогнать raw probe
 - прогнать exact verifier harness
-- явно записать в task summary и milestone validation, что tmux/UAT не выполнялся человеком
+- явно записать в task summary и milestone validation, что tmux/UAT не выполнялся человеком на текущем closure rerun
 - считать scripted `pass/blocker/fail` только доказательством runtime-state; milestone/manual closure остаётся открытым blocker до отдельного human-attended tmux checklist
+
+## Retest exit criteria
+
+Повторный milestone retest имеет смысл только если выполнено хотя бы одно условие триггера:
+
+- raw probe для scenario A начал возвращать documented structured seam через `web_search_call.action.sources` или `message.content[].annotations`; или
+- принято новое явное решение, которое пересматривает D018 и разрешает иной truthful closure contract.
+
+После такого триггера retest считается достаточным только при всех условиях ниже:
+
+1. `npm test` остаётся зелёным.
+2. Raw probe (`node scripts/openai-search-raw-probe.mjs ...`) даёт `overallVerdict: pass`, а для scenario A `documentedStructuredSourceCount > 0`.
+3. Exact verifier (`node scripts/verify-openai-search-proof.mjs ...`) даёт `overallVerdict: pass`, сохраняет `finalWebSearchResultCount == finalServerToolUseCount`, и хотя бы один финальный `webSearchResult` block для scenario A содержит реальные URL, а не только sentinel completion.
+4. Scenario B остаётся clean negative path: zero search artifacts, zero final `webSearchResult`, `garbageUrlDetected: false`.
+5. Human operator проходит tmux/UAT checklist для scenarios A и B и фиксирует итог `pass`/`blocker`/`fail`.
+
+Если провайдер вернёт только `web_search_call.results` без documented seams, по D018 это всё ещё blocker, а не milestone closure.
 
 ## Useful diagnostics
 
