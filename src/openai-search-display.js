@@ -78,6 +78,10 @@ export function extractActionSources(action) {
 /**
  * Извлечение источников из web_search_call.results.
  *
+ * Этот seam остаётся defensive: если provider/proxy вернёт `results`, мы их не теряем,
+ * но truthful closure и proof не должны зависеть только от него без документированного
+ * `action.sources` или message annotations.
+ *
  * @param {any} results Structured results web_search_call.
  * @returns {Array<{title: string, url: string}>} Источники.
  */

@@ -24,7 +24,7 @@ POC extension для `gsd` / `pi`, который включает нативн�
   - `search-the-web`
   - `search_and_read`
   - `google_search`
-- добавляет `include: ["web_search_call.action.sources", "web_search_call.results"]`
+- добавляет `include: ["web_search_call.action.sources"]`
 - выставляет `tool_choice = "auto"`, если поле не задано
 - выставляет `parallel_tool_calls = true`, если поле не задано
 - поддерживает live/cached режим и базовые фильтры через env
@@ -41,7 +41,8 @@ POC extension для `gsd` / `pi`, который включает нативн�
 
 - `openai-codex-responses` пока без аналогичного display patch,
 - `azure-openai-responses` пока без аналогичного display patch,
-- если upstream не вернёт structured `action.sources`, `results` или annotations, extension не выдумает их сам.
+- если upstream не вернёт documented `action.sources` или annotations, extension не выдумает их сам.
+- если provider/proxy дополнительно вернёт `results`, extension сможет прочитать их как defensive seam, но milestone closure не опирается на этот недокументированный path.
 
 То есть это уже не только payload injection, а рабочий runtime patch для основного OpenAI Responses сценария, но ещё не полный upstream-quality клон UX Codex.
 
@@ -184,7 +185,7 @@ EXTENSION_PATH="$PWD/index.js"
 
 ### 1. Raw Responses probe
 
-Показывает, есть ли structured URLs уже в upstream payload через `web_search_call.action.sources`, `web_search_call.results` или message annotations.
+Показывает, есть ли documented structured URLs уже в upstream payload через `web_search_call.action.sources` или message annotations. Если provider/proxy внезапно вернёт `web_search_call.results`, probe покажет это как opportunistic seam, но не зачтёт за documented closure.
 
 ```bash
 node scripts/openai-search-raw-probe.mjs \
@@ -234,9 +235,8 @@ node scripts/verify-openai-search-proof.mjs \
 
 Оба script запускаются без operational errors, а затем:
 
-- raw probe показывает хотя бы один truthful structured seam для scenario A:
+- raw probe показывает хотя бы один documented truthful structured seam для scenario A:
   - `action.sources`, или
-  - `results`, или
   - `annotations`
 - verifier harness проходит exact 1 MiB contract без `ENOBUFS`
 - scenario A содержит финальные factual `serverToolUse` / `webSearchResult` blocks с сохранённым `toolUseId` separation
@@ -251,7 +251,7 @@ Scripts отработали штатно, но truthful closure для scenario
 
 Типичные blocker signatures:
 
-- raw probe вернул `verdict: blocker` и показал, что structured URLs отсутствуют уже в raw payload
+- raw probe вернул `verdict: blocker` и показал, что documented structured URLs отсутствуют уже в raw payload
 - verifier закончил scenario A только sentinel `web_search_tool_result_complete` без structured URLs
 - scenario B остаётся чистым, то есть локальный negative path не сломан
 

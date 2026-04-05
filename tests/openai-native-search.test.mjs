@@ -190,7 +190,6 @@ test("injectNativeWebSearch injects tool and removes custom search tools", () =>
   assert.equal(result.parallel_tool_calls, true);
   assert.deepEqual(result.include, [
     "web_search_call.action.sources",
-    "web_search_call.results",
   ]);
   assert.deepEqual(result.tools, [
     { type: "function", name: "read" },
@@ -219,7 +218,6 @@ test("ensureNativeSearchIncludes preserves existing include fields and dedupes d
   assert.deepEqual(payload.include, [
     "reasoning.encrypted_content",
     "web_search_call.action.sources",
-    "web_search_call.results",
   ]);
 });
 
@@ -1333,6 +1331,79 @@ test("raw proof classification marks scenario A as blocker without structured se
     annotationSources: 0,
     inlineSources: 1,
   });
+});
+
+test("raw proof classification passes scenario A when action.sources is present", () => {
+  const result = classifyRawResponse(
+    {
+      output: [
+        {
+          type: "web_search_call",
+          id: "ws_1",
+          action: {
+            type: "search",
+            query: "openai news",
+            sources: [
+              { type: "url", url: "https://example.com/action-source" },
+            ],
+          },
+        },
+        {
+          type: "message",
+          id: "msg_1",
+          content: [
+            {
+              type: "output_text",
+              text: "- OpenAI news",
+              annotations: [],
+            },
+          ],
+        },
+      ],
+    },
+    "A",
+  );
+
+  assert.equal(result.verdict, "pass");
+  assert.deepEqual(result.summary.documentedStructuredSeams, ["action.sources"]);
+  assert.deepEqual(result.summary.opportunisticStructuredSeams, []);
+});
+
+test("raw proof classification keeps results-only seam as blocker", () => {
+  const result = classifyRawResponse(
+    {
+      output: [
+        {
+          type: "web_search_call",
+          id: "ws_1",
+          action: {
+            type: "search",
+            query: "openai news",
+          },
+          results: [
+            { title: "Result source", url: "https://example.com/result-source" },
+          ],
+        },
+        {
+          type: "message",
+          id: "msg_1",
+          content: [
+            {
+              type: "output_text",
+              text: "- OpenAI news",
+              annotations: [],
+            },
+          ],
+        },
+      ],
+    },
+    "A",
+  );
+
+  assert.equal(result.verdict, "blocker");
+  assert.match(result.reason, /opportunistic results seam/);
+  assert.deepEqual(result.summary.documentedStructuredSeams, []);
+  assert.deepEqual(result.summary.opportunisticStructuredSeams, ["results"]);
 });
 
 test("raw proof classification passes scenario B only when search stays absent", () => {

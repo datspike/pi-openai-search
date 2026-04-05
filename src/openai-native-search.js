@@ -12,7 +12,6 @@ export const CUSTOM_SEARCH_TOOL_NAMES = new Set([
 
 export const OPENAI_NATIVE_SEARCH_INCLUDE_FIELDS = new Set([
   "web_search_call.action.sources",
-  "web_search_call.results",
 ]);
 
 /**
