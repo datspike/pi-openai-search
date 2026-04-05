@@ -2,6 +2,24 @@ export const SUPPORTED_RUNTIME = Object.freeze({
   product: "standalone-pi",
   provider: "openai",
   api: "openai-responses",
+  testedBaselineVersion: "0.65.0",
+});
+
+export const COMPAT_CAPABILITIES = Object.freeze({
+  lifecycle: Object.freeze({
+    bootstrap: "bootstrapCompatRuntime(pi)",
+    activation: "activateCompatFeatures(pi, capabilitySummary)",
+    warnings: "feature-level warnings only; unknown version stays in diagnostics",
+  }),
+  features: Object.freeze([
+    "provider-compat",
+    "interactive-inline",
+    "tool-render",
+  ]),
+  policy: Object.freeze({
+    unknownVersion: "allowed-if-probe-passes",
+    degradation: "feature-level-fail-open",
+  }),
 });
 
 export const ARCHITECTURE_LAYERS = Object.freeze({
@@ -28,9 +46,9 @@ export const ARCHITECTURE_LAYERS = Object.freeze({
     ]),
   },
   compat: {
-    stability: "experimental",
+    stability: "compat-enhanced",
     namespace: "src/compat",
-    description: "Опциональный compat-слой для runtime/UI internals standalone pi.",
+    description: "Capability-gated compat-слой для runtime/UI internals standalone pi.",
     allowedImports: Object.freeze([
       "pi-ai/dist/**",
       "@mariozechner/pi-coding-agent/dist/**",
@@ -39,7 +57,8 @@ export const ARCHITECTURE_LAYERS = Object.freeze({
     outputs: Object.freeze([
       "optional renderer patch",
       "optional provider override",
-      "runtime warning",
+      "runtime diagnostics",
+      "feature-level warning",
     ]),
   },
 });
@@ -85,6 +104,7 @@ export const ENV_TAXONOMY = Object.freeze({
 
 export const CANONICAL_CONTRACT_MAP = Object.freeze({
   supportedRuntime: SUPPORTED_RUNTIME,
+  compatCapabilities: COMPAT_CAPABILITIES,
   layers: ARCHITECTURE_LAYERS,
   sourceEvidence: CANONICAL_SOURCE_EVIDENCE,
   env: ENV_TAXONOMY,

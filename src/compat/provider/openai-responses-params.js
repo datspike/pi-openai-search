@@ -1,4 +1,4 @@
-import { appendUniqueIncludeField } from "../../openai-native-search.js";
+import { appendUniqueIncludeField } from "../../core/payload/native-search.js";
 import { supportsXhigh } from "../runtime/pi-ai-compat.js";
 
 const OPENAI_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex", "opencode"]);

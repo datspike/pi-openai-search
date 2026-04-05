@@ -1,7 +1,16 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
+
+import {
+  buildCompatWarnings,
+  classifyPiVersion,
+  COMPAT_FEATURES,
+  createCompatFeatureStatus,
+  createDisabledCompatFeatureStatus,
+  summarizeCompatStatus,
+} from "./pi-compat-capabilities.js";
 
 let resolvedPiBinPath;
 let resolvedRuntimeDescriptor;
@@ -73,9 +82,29 @@ export function resolvePiBinPath() {
 }
 
 /**
+ * Чтение версии standalone pi из package metadata.
+ *
+ * @param {string} root Корень runtime.
+ * @returns {string | undefined} Версия runtime.
+ */
+function readPiRuntimeVersion(root) {
+  const packageJsonPath = path.join(root, "package.json");
+  if (!existsSync(packageJsonPath)) {
+    return undefined;
+  }
+
+  try {
+    const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8"));
+    return typeof packageJson?.version === "string" ? packageJson.version : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Определение дескриптора standalone pi runtime.
  *
- * @returns {{kind: "pi", binPath: string, root: string}} Дескриптор runtime.
+ * @returns {{kind: "pi", binPath: string, root: string, version?: string}} Дескриптор runtime.
  */
 export function resolvePiRuntimeDescriptor() {
   if (resolvedRuntimeDescriptor) {
@@ -100,6 +129,7 @@ export function resolvePiRuntimeDescriptor() {
     kind: "pi",
     binPath,
     root,
+    version: readPiRuntimeVersion(root),
   };
   return resolvedRuntimeDescriptor;
 }
@@ -129,34 +159,94 @@ export async function importPiRuntimeModule(relativePath) {
 }
 
 /**
- * Безопасная регистрация compat-слоя с fail-open деградацией.
+ * Capability probe для compat-фич standalone pi.
  *
- * @param {string} featureName Название compat-фичи.
- * @param {() => Promise<any>} loader Функция загрузки/регистрации.
- * @param {string | undefined} envFlag Значение env-флага.
- * @returns {Promise<{enabled: boolean, applied: boolean, reason?: string, error?: Error}>} Результат регистрации.
+ * @param {any} pi Экземпляр pi runtime.
+ * @param {{probeProviderCompat?: Function, probeInteractiveInlineCompat?: Function, probeToolRenderCompat?: Function}} probes Настраиваемые probes.
+ * @returns {Promise<{runtime: any, features: Record<string, any>, warnings: string[], diagnostics: string[], status: string}>} Compat summary.
  */
-export async function registerCompatLayer(featureName, loader, envFlag) {
-  if (!parseCompatBoolean(envFlag, true)) {
+export async function probePiCompatCapabilities(pi, probes = {}) {
+  let descriptor;
+
+  try {
+    descriptor = resolvePiRuntimeDescriptor();
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    const features = {
+      [COMPAT_FEATURES.providerCompat]: createCompatFeatureStatus(COMPAT_FEATURES.providerCompat, {
+        supported: false,
+        reason,
+      }),
+      [COMPAT_FEATURES.interactiveInline]: createCompatFeatureStatus(COMPAT_FEATURES.interactiveInline, {
+        supported: false,
+        reason,
+      }),
+      [COMPAT_FEATURES.toolRender]: createCompatFeatureStatus(COMPAT_FEATURES.toolRender, {
+        supported: false,
+        reason,
+      }),
+    };
+
     return {
-      enabled: false,
-      applied: false,
-      reason: `${featureName} disabled by env`,
+      runtime: {
+        kind: "pi",
+        descriptor: undefined,
+        version: classifyPiVersion(undefined),
+      },
+      features,
+      warnings: buildCompatWarnings(features),
+      diagnostics: [reason],
+      status: summarizeCompatStatus(features),
     };
   }
 
-  try {
-    await loader();
-    return {
-      enabled: true,
-      applied: true,
-    };
-  } catch (error) {
-    return {
-      enabled: true,
-      applied: false,
-      reason: `${featureName} compat unavailable`,
-      error: error instanceof Error ? error : new Error(String(error)),
-    };
+  const version = classifyPiVersion(descriptor.version);
+  const diagnostics = [...version.diagnostics];
+
+  const providerEnabled = parseCompatBoolean(process.env.PI_OPENAI_NATIVE_SEARCH_PROVIDER_COMPAT, true);
+  const inlineEnabled = parseCompatBoolean(process.env.PI_OPENAI_NATIVE_SEARCH_INTERACTIVE_COMPAT, true);
+  const toolRenderEnabled = parseCompatBoolean(process.env.PI_OPENAI_NATIVE_SEARCH_TOOL_RENDER_COMPAT, true);
+
+  const featureEntries = await Promise.all([
+    providerEnabled
+      ? probes.probeProviderCompat?.(pi, descriptor)
+      : Promise.resolve(createDisabledCompatFeatureStatus(COMPAT_FEATURES.providerCompat)),
+    inlineEnabled
+      ? probes.probeInteractiveInlineCompat?.(descriptor)
+      : Promise.resolve(createDisabledCompatFeatureStatus(COMPAT_FEATURES.interactiveInline)),
+    toolRenderEnabled
+      ? probes.probeToolRenderCompat?.(descriptor)
+      : Promise.resolve(createDisabledCompatFeatureStatus(COMPAT_FEATURES.toolRender)),
+  ]);
+
+  const features = {
+    [COMPAT_FEATURES.providerCompat]: featureEntries[0] || createCompatFeatureStatus(COMPAT_FEATURES.providerCompat, {
+      supported: false,
+      reason: "provider-compat probe missing",
+    }),
+    [COMPAT_FEATURES.interactiveInline]: featureEntries[1] || createCompatFeatureStatus(COMPAT_FEATURES.interactiveInline, {
+      supported: false,
+      reason: "interactive-inline probe missing",
+    }),
+    [COMPAT_FEATURES.toolRender]: featureEntries[2] || createCompatFeatureStatus(COMPAT_FEATURES.toolRender, {
+      supported: false,
+      reason: "tool-render probe missing",
+    }),
+  };
+
+  for (const feature of Object.values(features)) {
+    diagnostics.push(...(feature.diagnostics || []));
   }
+
+  return {
+    runtime: {
+      kind: "pi",
+      descriptor,
+      version,
+    },
+    features,
+    warnings: buildCompatWarnings(features),
+    diagnostics,
+    status: summarizeCompatStatus(features),
+  };
 }

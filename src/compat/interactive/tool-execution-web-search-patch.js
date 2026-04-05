@@ -1,8 +1,12 @@
 import {
   formatTruthfulWebSearchDoneLabel,
   formatTruthfulWebSearchPendingLabel,
-} from "../../openai-search-display.js";
+} from "../../core/lifecycle/search-status.js";
 import { importPiRuntimeModule } from "../runtime/pi-runtime.js";
+import {
+  COMPAT_FEATURES,
+  createCompatFeatureStatus,
+} from "../runtime/pi-compat-capabilities.js";
 
 const WEB_SEARCH_PATCH_MARKER = Symbol.for("pi-openai-search.web-search-tool-execution-patched");
 
@@ -38,7 +42,7 @@ async function loadInteractiveToolExecutionRuntime() {
  * @param {any} ToolExecutionComponent Экспортированный компонент.
  * @returns {void}
  */
-function assertPatchTarget(ToolExecutionComponent) {
+export function assertToolExecutionPatchTarget(ToolExecutionComponent) {
   if (typeof ToolExecutionComponent !== "function") {
     throw new Error("Несовместимый interactive tool-execution runtime: отсутствует export ToolExecutionComponent.");
   }
@@ -105,7 +109,7 @@ function formatTruthfulInteractiveWebSearch(component, runtime) {
  * @returns {void}
  */
 export function applyTruthfulInteractiveWebSearchPatch(ToolExecutionComponent, runtime) {
-  assertPatchTarget(ToolExecutionComponent);
+  assertToolExecutionPatchTarget(ToolExecutionComponent);
 
   if (ToolExecutionComponent.prototype[WEB_SEARCH_PATCH_MARKER]) {
     return;
@@ -127,6 +131,28 @@ export function applyTruthfulInteractiveWebSearchPatch(ToolExecutionComponent, r
  *
  * @returns {Promise<void>} Promise регистрации patch.
  */
+/**
+ * Capability probe для truthful tool-render compat.
+ *
+ * @returns {Promise<{feature: string, enabled: boolean, status: string, supported: boolean, reason?: string, diagnostics: string[]}>} Статус compat-фичи.
+ */
+export async function probeTruthfulInteractiveWebSearchPatchCapability() {
+  try {
+    const runtime = await loadInteractiveToolExecutionRuntime();
+    assertToolExecutionPatchTarget(runtime.ToolExecutionComponent);
+    return createCompatFeatureStatus(COMPAT_FEATURES.toolRender, {
+      supported: true,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return createCompatFeatureStatus(COMPAT_FEATURES.toolRender, {
+      supported: false,
+      reason: "UI compat для native search недоступен; tool-render патч пропущен",
+      diagnostics: [message],
+    });
+  }
+}
+
 export async function registerTruthfulInteractiveWebSearchPatch() {
   if (!toolExecutionPatchPromise) {
     toolExecutionPatchPromise = loadInteractiveToolExecutionRuntime()

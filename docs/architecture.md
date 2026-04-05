@@ -1,128 +1,107 @@
 # Архитектура `pi-openai-search`
 
-## Supported path
+## Supported runtime
 
-Поддерживаемый path ограничен одним сочетанием:
+Поддерживаемый scope намеренно узкий:
 
 - standalone `pi`
 - `provider=openai`
 - `api=openai-responses`
+- tested baseline runtime: `pi 0.65.0`
 
-Всё остальное находится вне scope текущего репозитория.
+Unknown `pi` version не считается hard blocker'ом сама по себе. Разрешение идёт capability-first: если probe проходит, compat path остаётся допустимым.
 
 ## Слои
 
-### `core`
+### `src/core/**`
 
-`core` - стабильный слой в `src/core/`, который опирается только на публичные extension hooks:
+Стабильный слой на публичных hooks:
 
 - `model_select`
 - `before_provider_request`
 - `message_update`
 - `message_end`
 
-Ответственность `core`:
+Ответственность core:
 
-- чтение и нормализация stable env;
-- payload mutation для native `web_search`;
-- truthful policy для source evidence;
-- lifecycle state для factual search status;
-- safe degradation без hard failure.
+- stable env и payload mutation
+- truthful source policy
+- lifecycle status для factual search
+- safe degradation без знания private runtime internals
 
-Ограничения `core`:
+`core` не импортирует `src/compat/**` и private runtime модули.
 
-- нельзя импортировать private runtime internals `pi` и `pi-ai`;
-- нельзя импортировать код из `src/compat/`;
-- нельзя создавать synthetic citations, synthetic query labels или synthetic `webSearchResult`.
+### `src/compat/**`
 
-### `experimental compat`
-
-`experimental compat` - опциональный слой в `src/compat/`, который допускает работу с unstable runtime/UI internals standalone `pi`.
+Compat framework для private seams standalone `pi`.
 
 Ответственность compat:
 
-- runtime autodiscovery;
-- private imports standalone `pi`;
-- optional interactive/render patches;
-- optional provider override;
-- version guards, warnings и fail-open degradation.
+- runtime discovery
+- version classification
+- capability probes
+- feature activation
+- diagnostics и feature-level warnings
 
-Ограничения compat:
+## Lifecycle contract
 
-- compat не должен быть обязательным для базового supported path;
-- compat не должен протаскивать private runtime knowledge обратно в `core`;
-- любая enhanced UX-логика из compat должна оставаться truthful.
+Boot path разбит на три части:
 
-## Dependency rules
+1. `bootstrapCompatRuntime(pi)`
+2. `probePiCompatCapabilities(pi, probes)`
+3. `activateCompatFeatures(pi, capabilitySummary)`
 
-Разрешённые зависимости:
+`index.js` вызывает bootstrap один раз при регистрации extension. После этого `core` получает promise с compat summary и не инициирует второй bootstrap.
 
-- `index.js` -> `src/core/**`
-- `index.js` -> `src/compat/**`
-- `src/compat/**` -> `src/core/contracts/**`
-- `src/core/**` -> `src/shared/**`
-- `src/compat/**` -> `src/shared/**`
+Это закрывает два режима:
 
-Запрещённые зависимости:
+- с `model_select` -> UI warnings и status появляются поздно, когда модель известна
+- без `model_select` -> backend path и compat overlays уже готовы за счёт раннего bootstrap
 
-- `src/core/**` -> `src/compat/**`
-- `src/core/**` -> `pi-ai/dist/**`
-- `src/core/**` -> `@mariozechner/pi-coding-agent/dist/**`
-- `src/core/**` -> `node_modules/**/dist/**`
+## Capability registry
 
-## Canonical inputs и outputs
+Фичи compat ограничены тремя ключами:
 
-Входы `core`:
+- `provider-compat`
+- `interactive-inline`
+- `tool-render`
 
-- provider/model metadata из `model_select` и `before_provider_request`;
-- `assistantMessageEvent` из `message_update`;
-- финальное assistant message из `message_end`.
+Для каждой фичи summary хранит:
 
-Канонические выходы `core`:
+- `enabled`
+- `status`
+- `supported`
+- `reason`
+- `diagnostics`
 
-- mutated provider payload для native `web_search`;
-- canonical truthful source set;
-- lifecycle status state для UI.
+Итоговый compat status бывает:
 
-## Truthful source evidence
+- `supported`
+- `partial`
+- `unavailable`
 
-Допустимые источники evidence:
+## Version policy
 
-- documented structured `web_search_call.action.sources`;
-- `output_text.annotations`;
-- defensive observed seams: `web_search_call.results`;
-- inline URLs в финальном тексте, если они реально присутствуют в observed output.
+Версия runtime классифицируется отдельно от feature support:
 
-Недопустимые fallback-механизмы:
+- `0.65.0` -> baseline `supported`
+- любая другая определённая версия -> `unknown`, но без user-facing warning
+- версия не определилась -> `unknown`, probing остаётся capability-first
 
-- synthetic citations;
-- synthetic query labels;
-- prompt-derived search artifacts;
-- fabricated `webSearchResult` blocks без observed evidence.
+User-facing warnings строятся только из реально недоступных compat-фич. Диагностика версии остаётся maintainer/debug surface.
 
-## Env taxonomy
+## Truthful policy
 
-### Stable env
+Допустимые source seams:
 
-- `PI_OPENAI_NATIVE_SEARCH`
-- `PI_OPENAI_NATIVE_SEARCH_MODE`
-- `PI_OPENAI_NATIVE_SEARCH_CONTEXT_SIZE`
-- `PI_OPENAI_NATIVE_SEARCH_ALLOWED_DOMAINS`
-- `PI_OPENAI_NATIVE_SEARCH_COUNTRY`
-- `PI_OPENAI_NATIVE_SEARCH_REGION`
-- `PI_OPENAI_NATIVE_SEARCH_CITY`
-- `PI_OPENAI_NATIVE_SEARCH_TIMEZONE`
-- `PI_OPENAI_NATIVE_SEARCH_DEBUG_FILE`
-- `PI_OPENAI_NATIVE_SEARCH_DEBUG_MESSAGE_FILE`
+- `web_search_call.action.sources`
+- `message.output_text.annotations`
+- defensive observed seam `web_search_call.results`
+- inline URLs в финальном тексте, если они реально наблюдаемы
 
-### Experimental env
+Запрещено:
 
-- `PI_OPENAI_NATIVE_SEARCH_PROVIDER_COMPAT`
-- `PI_OPENAI_NATIVE_SEARCH_INTERACTIVE_COMPAT`
-- `PI_OPENAI_NATIVE_SEARCH_TOOL_RENDER_COMPAT`
-- `PI_BIN_PATH`
-- `PI_AGENT_DIR`
-
-## Migration note
-
-На переходном этапе допускается coexistence legacy-модулей из `src/`, но все новые stable contracts должны появляться только под `src/core/`, а новый unstable код - только под `src/compat/`.
+- synthetic citations
+- synthetic query labels
+- fabricated `webSearchResult`
+- prompt-derived search artifacts

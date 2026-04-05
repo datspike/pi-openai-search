@@ -1,15 +1,30 @@
 {
   "name": "pi-openai-search",
-  "private": true,
   "version": "0.1.0",
+  "private": true,
+  "description": "Standalone pi extension that enables native OpenAI Responses web_search with truthful compat-enhanced UX.",
+  "license": "MIT",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/spike/pi-openai-search.git"
+  },
+  "keywords": [
+    "pi",
+    "extension",
+    "openai",
+    "responses",
+    "web-search",
+    "compat"
+  ],
   "scripts": {
     "test": "npm run test:legacy && npm run test:core && npm run test:compat && npm run test:contracts && npm run test:proof",
     "test:legacy": "node --test tests/*.test.mjs",
     "test:core": "node --test tests/core/*.test.mjs",
     "test:compat": "node --test tests/compat/*.test.mjs",
     "test:contracts": "node --test tests/contracts/*.test.mjs",
-    "test:proof": "node --test tests/proof/*.test.mjs"
+    "test:proof": "node --test tests/proof/*.test.mjs",
+    "test:compat-smoke": "node scripts/compat-smoke.mjs"
   },
   "pi": {
     "extensions": [

@@ -1,5 +1,9 @@
 import { importPiRuntimeModule } from "../runtime/pi-runtime.js";
-import { formatWebSearchResult as formatInlineWebSearchResult } from "../../openai-search-display.js";
+import {
+  COMPAT_FEATURES,
+  createCompatFeatureStatus,
+} from "../runtime/pi-compat-capabilities.js";
+import { formatWebSearchResult as formatInlineWebSearchResult } from "../../core/lifecycle/search-status.js";
 
 const INLINE_SEARCH_PATCH_MARKER = Symbol.for("pi-openai-search.inline-search-order-patched");
 const INLINE_SEARCH_RENDER_CONTEXT = Symbol.for("pi-openai-search.inline-search-render-context");
@@ -46,7 +50,7 @@ async function loadInteractiveSearchOrderRuntime() {
  * @param {any} InteractiveMode Interactive mode runtime.
  * @returns {void}
  */
-function assertPatchTargets(AssistantMessageComponent, ToolExecutionComponent, InteractiveMode) {
+export function assertInteractiveSearchOrderPatchTargets(AssistantMessageComponent, ToolExecutionComponent, InteractiveMode) {
   if (typeof AssistantMessageComponent !== "function") {
     throw new Error("Несовместимый interactive runtime: отсутствует AssistantMessageComponent.");
   }
@@ -370,7 +374,7 @@ export function applyInteractiveSearchOrderPatch(
   InteractiveMode,
   runtime,
 ) {
-  assertPatchTargets(AssistantMessageComponent, ToolExecutionComponent, InteractiveMode);
+  assertInteractiveSearchOrderPatchTargets(AssistantMessageComponent, ToolExecutionComponent, InteractiveMode);
 
   if (AssistantMessageComponent.prototype[INLINE_SEARCH_PATCH_MARKER]) {
     return;
@@ -465,6 +469,32 @@ export function applyInteractiveSearchOrderPatch(
  *
  * @returns {Promise<void>} Promise регистрации patch.
  */
+/**
+ * Capability probe для inline interactive compat.
+ *
+ * @returns {Promise<{feature: string, enabled: boolean, status: string, supported: boolean, reason?: string, diagnostics: string[]}>} Статус compat-фичи.
+ */
+export async function probeInteractiveSearchOrderPatchCapability() {
+  try {
+    const runtime = await loadInteractiveSearchOrderRuntime();
+    assertInteractiveSearchOrderPatchTargets(
+      runtime.AssistantMessageComponent,
+      runtime.ToolExecutionComponent,
+      runtime.InteractiveMode,
+    );
+    return createCompatFeatureStatus(COMPAT_FEATURES.interactiveInline, {
+      supported: true,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return createCompatFeatureStatus(COMPAT_FEATURES.interactiveInline, {
+      supported: false,
+      reason: "UI compat для native search недоступен; inline-патч пропущен",
+      diagnostics: [message],
+    });
+  }
+}
+
 export async function registerInteractiveSearchOrderPatch() {
   if (!interactiveSearchOrderPatchPromise) {
     interactiveSearchOrderPatchPromise = loadInteractiveSearchOrderRuntime()

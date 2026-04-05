@@ -5,8 +5,8 @@ import {
   extractAnnotationSources,
   extractStructuredSearchCallSources,
   resolveWebSearchResultSources,
-  summarizeSearchInput,
-} from "../../openai-search-display.js";
+} from "../../core/truthful/search-results.js";
+import { summarizeSearchInput } from "../../core/lifecycle/search-status.js";
 
 /**
  * Кодирование text signature в формате pi-ai.

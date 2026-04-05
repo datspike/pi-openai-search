@@ -1,9 +1,9 @@
 import {
   injectNativeWebSearch,
   isOpenAIResponsesModel,
-  loadNativeSearchConfig,
-} from "../../openai-native-search.js";
-import { getFactualSearchLifecycleUpdate } from "../../openai-search-display.js";
+} from "../payload/native-search.js";
+import { loadNativeSearchConfig } from "../config/native-search-config.js";
+import { getFactualSearchLifecycleUpdate } from "../lifecycle/search-status.js";
 import { writeDebugSnapshot, writeMessageDebugSnapshot } from "./debug-snapshots.js";
 
 export const NATIVE_SEARCH_STATUS_KEY = "openai-native-web-search";
@@ -28,11 +28,11 @@ function getLastActiveSearch(activeSearches) {
  * Регистрация core-first extension pipeline.
  *
  * @param {any} pi Экземпляр pi runtime.
- * @param {{ensureExperimentalCompat?: () => Promise<{warnings?: string[]}>}} options Опции композиции.
+ * @param {{getCompatRuntime?: () => Promise<{warnings?: string[]}>}} options Опции композиции.
  * @returns {void}
  */
 export function registerCoreOpenAISearchExtension(pi, options = {}) {
-  const ensureExperimentalCompat = options.ensureExperimentalCompat || (async () => ({ warnings: [] }));
+  const getCompatRuntime = options.getCompatRuntime || (async () => ({ warnings: [] }));
 
   let lastStatusKey;
   let nativeReadyStatus;
@@ -65,7 +65,7 @@ export function registerCoreOpenAISearchExtension(pi, options = {}) {
     ctx.ui.setStatus(NATIVE_SEARCH_STATUS_KEY, nativeReadyStatus);
 
     if (nativeActive) {
-      const compat = await ensureExperimentalCompat();
+      const compat = await getCompatRuntime();
       for (const warning of compat?.warnings || []) {
         ctx.ui.notify(warning, "warning");
       }

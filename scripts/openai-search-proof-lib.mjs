@@ -10,12 +10,12 @@ import {
   extractAnnotationSources,
   extractInlineSourcesFromText,
   extractResultSources,
-} from "../src/openai-search-display.js";
+} from "../src/core/truthful/search-results.js";
 import {
   importPiRuntimeModule,
   resolvePiBinPath,
   resolvePiRuntimeDescriptor,
-} from "../src/pi-runtime.js";
+} from "../src/compat/runtime/pi-runtime.js";
 
 export const DEFAULT_PROOF_MODEL = "openai/gpt-5.4";
 export const DEFAULT_PI_AGENT_DIR = path.join(os.homedir(), ".pi", "agent");
