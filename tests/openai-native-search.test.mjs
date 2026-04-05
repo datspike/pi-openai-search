@@ -11,6 +11,7 @@ import {
   injectNativeWebSearch,
   isOpenAIResponsesModel,
   loadNativeSearchConfig,
+  looksLikeOpenAIResponsesPayload,
 } from "../src/openai-native-search.js";
 import {
   appendStructuredCitations,
@@ -18,6 +19,7 @@ import {
   extractInlineSourcesFromText,
   extractResultSources,
   extractStructuredSearchCallSources,
+  formatWebSearchResult,
   formatTruthfulWebSearchDoneLabel,
   formatTruthfulWebSearchPendingLabel,
   getFactualSearchLifecycleUpdate,
@@ -39,9 +41,15 @@ import {
   isMainModule,
   parseJsonlEvents,
   resolveAbsoluteExtensionPath,
+  resolveProviderApiKey,
   stampScenarioResult,
 } from "../scripts/openai-search-proof-lib.mjs";
-import { resetGsdPiCompatCache, resolveGsdPiRoot } from "../src/gsd-pi-compat.js";
+import {
+  importRuntimeModule,
+  resetGsdPiCompatCache,
+  resolveGsdPiRoot,
+  resolveRuntimeDescriptor,
+} from "../src/gsd-pi-compat.js";
 
 async function loadTestableExtensionModule(
   tempDir,
@@ -133,7 +141,7 @@ async function loadTestableDisplayPatchModule(tempDir) {
 
   const originalSource = fs.readFileSync(sourcePath, "utf8");
   const transformedSource = originalSource
-    .replace('"@gsd/pi-ai"', JSON.stringify(pathToFileURL(mockPiAiPath).href))
+    .replace('"./pi-ai-compat.js"', JSON.stringify(pathToFileURL(mockPiAiPath).href))
     .replace('"./openai-search-display.js"', JSON.stringify(pathToFileURL(searchDisplayPath).href))
     .replace('"./openai-native-search.js"', JSON.stringify(pathToFileURL(nativeSearchPath).href))
     .replace('"./gsd-pi-compat.js"', JSON.stringify(pathToFileURL(compatPath).href));
@@ -144,11 +152,13 @@ async function loadTestableDisplayPatchModule(tempDir) {
 
 async function loadTestableInteractiveSearchOrderPatchModule(tempDir) {
   const sourcePath = fileURLToPath(new URL("../src/openai-interactive-search-order-patch.js", import.meta.url));
+  const searchDisplayPath = fileURLToPath(new URL("../src/openai-search-display.js", import.meta.url));
   const compatPath = fileURLToPath(new URL("../src/gsd-pi-compat.js", import.meta.url));
   const transformedModulePath = path.join(tempDir, "openai-interactive-search-order-patch.testable.mjs");
 
   const transformedSource = fs
     .readFileSync(sourcePath, "utf8")
+    .replace('"./openai-search-display.js"', JSON.stringify(pathToFileURL(searchDisplayPath).href))
     .replace('"./gsd-pi-compat.js"', JSON.stringify(pathToFileURL(compatPath).href));
   fs.writeFileSync(transformedModulePath, transformedSource, "utf8");
   return import(pathToFileURL(transformedModulePath).href);
@@ -308,6 +318,44 @@ test("injectNativeWebSearch does not duplicate existing native tool", () => {
   assert.deepEqual(result.tools, [
     { type: "function", name: "read" },
     { type: "web_search", external_web_access: false },
+  ]);
+});
+
+test("looksLikeOpenAIResponsesPayload detects responses-shaped payload without model", () => {
+  assert.equal(looksLikeOpenAIResponsesPayload({ input: [] }), true);
+  assert.equal(looksLikeOpenAIResponsesPayload({ max_output_tokens: 1000 }), true);
+  assert.equal(looksLikeOpenAIResponsesPayload({ include: ["reasoning.encrypted_content"] }), true);
+  assert.equal(looksLikeOpenAIResponsesPayload({ messages: [] }), false);
+});
+
+test("injectNativeWebSearch can infer openai responses from payload shape when model is absent", () => {
+  const result = injectNativeWebSearch(
+    {
+      input: [{ role: "user", content: [{ type: "input_text", text: "hello" }] }],
+      tools: [{ type: "function", name: "read" }],
+      include: ["reasoning.encrypted_content"],
+    },
+    undefined,
+    {
+      enabled: true,
+      mode: "live",
+      contextSize: "medium",
+    },
+  );
+
+  assert.equal(result.tool_choice, "auto");
+  assert.equal(result.parallel_tool_calls, true);
+  assert.deepEqual(result.include, [
+    "reasoning.encrypted_content",
+    "web_search_call.action.sources",
+  ]);
+  assert.deepEqual(result.tools, [
+    { type: "function", name: "read" },
+    {
+      type: "web_search",
+      external_web_access: true,
+      search_context_size: "medium",
+    },
   ]);
 });
 
@@ -564,10 +612,13 @@ test("interactive search-order patch keeps native web search inline in chronolog
     }
 
     class MockToolExecutionComponent {
-      constructor(toolName, args) {
+      constructor(toolName, toolCallIdOrArgs, argsOrOptions) {
         this.kind = "tool";
         this.toolName = toolName;
-        this.args = args;
+        this.toolCallId =
+          typeof toolCallIdOrArgs === "string" ? toolCallIdOrArgs : undefined;
+        this.args =
+          typeof toolCallIdOrArgs === "string" ? argsOrOptions : toolCallIdOrArgs;
         this.result = undefined;
         this.expanded = false;
       }
@@ -782,6 +833,156 @@ test("interactive search-order patch keeps native web search inline in chronolog
   }
 });
 
+test("interactive search-order patch formats web search result without runtime helper", async () => {
+  const tempDir = fs.mkdtempSync(path.join(process.cwd(), ".tmp-pi-openai-search-inline-fallback-test-"));
+
+  try {
+    const patchModule = await loadTestableInteractiveSearchOrderPatchModule(tempDir);
+
+    class MockContainer {
+      constructor() {
+        this.children = [];
+      }
+
+      addChild(child) {
+        this.children.push(child);
+      }
+
+      clear() {
+        this.children = [];
+      }
+    }
+
+    class MockAssistantMessageComponent {
+      constructor(message) {
+        this.contentContainer = new MockContainer();
+        if (message) {
+          this.updateContent(message);
+        }
+      }
+
+      updateContent(message) {
+        this.lastMessage = message;
+        this.contentContainer.clear();
+        this.contentContainer.addChild({ kind: "fallback", message });
+      }
+
+      invalidate() {
+        if (this.lastMessage) {
+          this.updateContent(this.lastMessage);
+        }
+      }
+    }
+
+    class MockToolExecutionComponent {
+      constructor(toolName, toolCallId, args) {
+        this.kind = "tool";
+        this.toolName = toolName;
+        this.toolCallId = toolCallId;
+        this.args = args;
+      }
+
+      setExpanded(expanded) {
+        this.expanded = expanded;
+      }
+
+      updateResult(result) {
+        this.result = result;
+      }
+    }
+
+    class MockInteractiveMode {
+      constructor() {
+        this.ui = { requestRender() {} };
+        this.chatContainer = new MockContainer();
+        this.pendingTools = new Map();
+        this.hideThinkingBlock = false;
+        this.toolOutputExpanded = false;
+        this.settingsManager = {
+          getShowImages() {
+            return true;
+          },
+        };
+        this.footer = { invalidate() {} };
+      }
+
+      getMarkdownThemeWithSettings() {
+        return {};
+      }
+
+      getRegisteredToolDefinition() {
+        return undefined;
+      }
+
+      updateEditorBorderColor() {}
+
+      addMessageToChat(message) {
+        if (message.role === "assistant") {
+          this.chatContainer.addChild(new MockAssistantMessageComponent(message));
+          return;
+        }
+
+        this.chatContainer.addChild({ kind: "message", message });
+      }
+
+      async handleEvent() {}
+
+      renderSessionContext() {
+        throw new Error("original renderSessionContext should be patched");
+      }
+    }
+
+    patchModule.applyInteractiveSearchOrderPatch(
+      MockAssistantMessageComponent,
+      MockToolExecutionComponent,
+      MockInteractiveMode,
+      {
+        Spacer: class MockSpacer {},
+        Text: class MockText {},
+        Markdown: class MockMarkdown {},
+        theme: {
+          fg(_name, text) {
+            return text;
+          },
+          italic(text) {
+            return text;
+          },
+        },
+      },
+    );
+
+    const host = new MockInteractiveMode();
+    const assistantMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "serverToolUse",
+          id: "ws_1",
+          name: "web_search",
+          input: { type: "open_page", url: "https://openai.com/index/openai-acquires-tbpn" },
+        },
+        {
+          type: "webSearchResult",
+          toolUseId: "ws_1",
+          content: { type: "web_search_tool_result_complete" },
+        },
+      ],
+    };
+
+    host.renderSessionContext({ messages: [assistantMessage] });
+
+    const assistantComponent = host.chatContainer.children[0];
+    const toolComponent = assistantComponent.contentContainer.children.find((child) => child.kind === "tool");
+
+    assert.deepEqual(toolComponent.result, {
+      content: [{ type: "text", text: "Search complete" }],
+      isError: false,
+    });
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("applyTruthfulInteractiveWebSearchPatch rejects incompatible runtime shape", () => {
   assert.throws(
     () => applyTruthfulInteractiveWebSearchPatch(class {}, { theme: {}, keyHint() {} }),
@@ -790,9 +991,9 @@ test("applyTruthfulInteractiveWebSearchPatch rejects incompatible runtime shape"
 });
 
 test("interactive web search patch renders truthful labels for pending and done states", async (t) => {
-  let gsdRoot;
+  let runtimeDescriptor;
   try {
-    gsdRoot = resolveGsdPiRoot();
+    runtimeDescriptor = resolveRuntimeDescriptor();
   } catch (error) {
     t.skip(error instanceof Error ? error.message : String(error));
     return;
@@ -800,39 +1001,19 @@ test("interactive web search patch renders truthful labels for pending and done 
 
   await registerTruthfulInteractiveWebSearchPatch();
 
-  const toolExecutionModule = await import(
-    pathToFileURL(
-      path.join(
-        gsdRoot,
-        "packages",
-        "pi-coding-agent",
-        "dist",
-        "modes",
-        "interactive",
-        "components",
-        "tool-execution.js",
-      ),
-    ).href
+  void runtimeDescriptor;
+  const toolExecutionModule = await importRuntimeModule(
+    "packages/pi-coding-agent/dist/modes/interactive/components/tool-execution.js",
   );
-  const themeModule = await import(
-    pathToFileURL(
-      path.join(
-        gsdRoot,
-        "packages",
-        "pi-coding-agent",
-        "dist",
-        "modes",
-        "interactive",
-        "theme",
-        "theme.js",
-      ),
-    ).href
+  const themeModule = await importRuntimeModule(
+    "packages/pi-coding-agent/dist/modes/interactive/theme/theme.js",
   );
   themeModule.initTheme("default", false);
 
   const ui = { requestRender() {} };
   const pendingComponent = new toolExecutionModule.ToolExecutionComponent(
     "web_search",
+    "call_1",
     { query: "latest django version" },
     {},
     undefined,
@@ -854,6 +1035,7 @@ test("interactive web search patch renders truthful labels for pending and done 
 
   const malformedComponent = new toolExecutionModule.ToolExecutionComponent(
     "web_search",
+    "call_2",
     {},
     {},
     undefined,
@@ -866,6 +1048,7 @@ test("interactive web search patch renders truthful labels for pending and done 
 
   const secondComponent = new toolExecutionModule.ToolExecutionComponent(
     "web_search",
+    "call_3",
     { queries: ["openai news", "openai blog"] },
     {},
     undefined,
@@ -940,6 +1123,20 @@ test("getFactualSearchLifecycleUpdate uses only real search events", () => {
       statusText: "web: 2 sources",
       workingMessage: undefined,
     },
+  );
+});
+
+test("formatWebSearchResult formats sources and completion sentinel", () => {
+  assert.equal(
+    formatWebSearchResult([
+      { type: "web_search_result", title: "OpenAI", url: "https://openai.com/" },
+      { type: "web_search_result", title: "Docs", url: "https://platform.openai.com/" },
+    ]),
+    "OpenAI: https://openai.com/\nDocs: https://platform.openai.com/",
+  );
+  assert.equal(
+    formatWebSearchResult({ type: "web_search_tool_result_complete" }),
+    "Search complete",
   );
 });
 
@@ -1233,6 +1430,51 @@ test("extension updates TUI status for native web search lifecycle", async () =>
       ["openai-native-web-search", "web: node.js 24.14.1 release notes"],
       ["openai-native-web-search", "web: 2 sources"],
     ]);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("extension reuses last selected model when before_provider_request omits model", async () => {
+  const tempDir = fs.mkdtempSync(path.join(process.cwd(), ".tmp-pi-openai-search-model-fallback-test-"));
+
+  try {
+    const extensionModule = await loadTestableExtensionModule(tempDir, {
+      fsPromisesLines: [
+        'export async function mkdir() {}',
+        'export async function writeFile() {}',
+      ],
+      nativeSearchLines: [
+        'export function injectNativeWebSearch(payload, model) {',
+        '  return { ...payload, seenModelApi: model?.api, seenProvider: model?.provider, seenModelId: model?.id };',
+        '}',
+        'export function isOpenAIResponsesModel(model) { return model?.api === "openai-responses"; }',
+        'export function loadNativeSearchConfig() { return { enabled: true, mode: "live" }; }',
+      ],
+    });
+
+    const handlers = new Map();
+    extensionModule.default({
+      on(event, handler) {
+        handlers.set(event, handler);
+      },
+      registerProvider() {},
+    });
+
+    handlers.get("model_select")(
+      {
+        model: { api: "openai-responses", provider: "openai", id: "gpt-5.4-mini" },
+      },
+      { hasUI: false },
+    );
+
+    const nextPayload = handlers.get("before_provider_request")({
+      payload: { tools: [] },
+    });
+
+    assert.equal(nextPayload.seenModelApi, "openai-responses");
+    assert.equal(nextPayload.seenProvider, "openai");
+    assert.equal(nextPayload.seenModelId, "gpt-5.4-mini");
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -1795,7 +2037,7 @@ test("registerOpenAIResponsesDisplayPatch is idempotent on repeated calls", asyn
 
     const originalSource = fs.readFileSync(sourcePath, "utf8");
     const transformedSource = originalSource
-      .replace('"@gsd/pi-ai"', JSON.stringify(pathToFileURL(mockPiAiPath).href))
+      .replace('"./pi-ai-compat.js"', JSON.stringify(pathToFileURL(mockPiAiPath).href))
       .replace('"./openai-search-display.js"', JSON.stringify(pathToFileURL(searchDisplayPath).href))
       .replace('"./openai-native-search.js"', JSON.stringify(pathToFileURL(nativeSearchPath).href))
       .replace('"./gsd-pi-compat.js"', JSON.stringify(pathToFileURL(compatPath).href));
@@ -1862,6 +2104,37 @@ test("loadExtensions imports extension without hard failure", async (t) => {
   } finally {
     piAiModule.resetApiProviders();
   }
+});
+
+test("proof helper resolves provider api key via standalone pi auth api", async () => {
+  const authStorage = {
+    async getApiKey(provider) {
+      assert.equal(provider, "openai");
+      return "pi-api-key";
+    },
+  };
+
+  const apiKey = await resolveProviderApiKey(authStorage, "openai");
+
+  assert.equal(apiKey, "pi-api-key");
+});
+
+test("proof helper resolves provider api key via legacy gsd auth api", async () => {
+  const authStorage = {
+    getCredentialsForProvider(provider) {
+      assert.equal(provider, "openai");
+      return [undefined, { slot: "secondary" }, { slot: "primary" }];
+    },
+    async resolveCredentialApiKey(provider, credential) {
+      assert.equal(provider, "openai");
+      assert.deepEqual(credential, { slot: "secondary" });
+      return "legacy-api-key";
+    },
+  };
+
+  const apiKey = await resolveProviderApiKey(authStorage, "openai");
+
+  assert.equal(apiKey, "legacy-api-key");
 });
 
 test("proof helper parses JSONL and rejects malformed rows", () => {

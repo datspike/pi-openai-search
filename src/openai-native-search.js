@@ -128,6 +128,35 @@ export function isOpenAIResponsesModel(model) {
 }
 
 /**
+ * Эвристика для распознавания payload OpenAI Responses без model metadata.
+ *
+ * Нужна для standalone `pi`, где `before_provider_request` может приходить
+ * без `event.model`, хотя payload уже собран в формате Responses API.
+ *
+ * @param {Record<string, any> | undefined} payload Provider payload.
+ * @returns {boolean} true, если payload похож на Responses API.
+ */
+export function looksLikeOpenAIResponsesPayload(payload) {
+  if (!payload || typeof payload !== "object") {
+    return false;
+  }
+
+  if (Array.isArray(payload.input)) {
+    return true;
+  }
+
+  if ("max_output_tokens" in payload) {
+    return true;
+  }
+
+  if (Array.isArray(payload.include) && payload.include.some((field) => typeof field === "string")) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
  * Сборка OpenAI web_search tool payload.
  *
  * @param {{mode: "live" | "cached" | "off", contextSize?: "low" | "medium" | "high", allowedDomains?: string[], userLocation?: {type: "approximate", country?: string, region?: string, city?: string, timezone?: string}}} config Конфиг native search.
@@ -226,7 +255,7 @@ export function injectNativeWebSearch(payload, model, config) {
     return payload;
   }
 
-  if (!isOpenAIResponsesModel(model)) {
+  if (!isOpenAIResponsesModel(model) && !looksLikeOpenAIResponsesPayload(payload)) {
     return payload;
   }
 

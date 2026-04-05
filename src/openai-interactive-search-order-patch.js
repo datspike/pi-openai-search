@@ -1,4 +1,5 @@
 import { importGsdPiModule } from "./gsd-pi-compat.js";
+import { formatWebSearchResult as formatInlineWebSearchResult } from "./openai-search-display.js";
 
 const INLINE_SEARCH_PATCH_MARKER = Symbol.for("pi-openai-search.inline-search-order-patched");
 const INLINE_SEARCH_RENDER_CONTEXT = Symbol.for("pi-openai-search.inline-search-render-context");
@@ -9,18 +10,17 @@ let interactiveSearchOrderPatchPromise;
 /**
  * Загрузка interactive runtime для truthful search-order patch.
  *
- * @returns {Promise<{AssistantMessageComponent: any, ToolExecutionComponent: any, InteractiveMode: any, Spacer: any, Text: any, Markdown: any, theme: any, formatTimestamp: Function}>} Runtime-модули.
+ * @returns {Promise<{AssistantMessageComponent: any, ToolExecutionComponent: any, InteractiveMode: any, Spacer: any, Text: any, Markdown: any, theme: any}>} Runtime-модули.
  */
 async function loadInteractiveSearchOrderRuntime() {
   try {
-    const [assistantMessageModule, toolExecutionModule, interactiveModeModule, piTuiModule, themeModule, timestampModule] =
+    const [assistantMessageModule, toolExecutionModule, interactiveModeModule, piTuiModule, themeModule] =
       await Promise.all([
         importGsdPiModule("packages/pi-coding-agent/dist/modes/interactive/components/assistant-message.js"),
         importGsdPiModule("packages/pi-coding-agent/dist/modes/interactive/components/tool-execution.js"),
         importGsdPiModule("packages/pi-coding-agent/dist/modes/interactive/interactive-mode.js"),
         importGsdPiModule("node_modules/@gsd/pi-tui/dist/index.js"),
         importGsdPiModule("packages/pi-coding-agent/dist/modes/interactive/theme/theme.js"),
-        importGsdPiModule("packages/pi-coding-agent/dist/modes/interactive/components/timestamp.js"),
       ]);
 
     return {
@@ -31,7 +31,6 @@ async function loadInteractiveSearchOrderRuntime() {
       Text: piTuiModule.Text,
       Markdown: piTuiModule.Markdown,
       theme: themeModule.theme,
-      formatTimestamp: timestampModule.formatTimestamp,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -84,7 +83,7 @@ function attachInlineSearchRenderContext(component, host) {
     ui: host.ui,
     formatWebSearchResult: typeof host.formatWebSearchResult === "function"
       ? host.formatWebSearchResult.bind(host)
-      : () => "",
+      : formatInlineWebSearchResult,
     getShowImages: () => host.settingsManager?.getShowImages?.() ?? true,
   };
 
@@ -151,6 +150,7 @@ function buildInlineWebSearchComponent(assistantComponent, ToolExecutionComponen
   const showImages = renderContext.getShowImages ? renderContext.getShowImages() : true;
   const component = new ToolExecutionComponent(
     content.name,
+    content.id,
     content.input ?? {},
     { showImages },
     undefined,
@@ -192,7 +192,7 @@ function buildInlineWebSearchComponent(assistantComponent, ToolExecutionComponen
   const formatWebSearchResult =
     typeof renderContext.formatWebSearchResult === "function"
       ? renderContext.formatWebSearchResult
-      : () => "";
+      : formatInlineWebSearchResult;
 
   component.updateResult({
     content: [{ type: "text", text: formatWebSearchResult(searchContent) }],
@@ -311,6 +311,7 @@ function renderSessionContextWithInlineSearch(host, sessionContext, options = {}
         if (content.type === "toolCall") {
           const component = new ToolExecutionComponent(
             content.name,
+            content.id,
             content.arguments,
             { showImages: host.settingsManager.getShowImages() },
             host.getRegisteredToolDefinition(content.name),
@@ -423,6 +424,7 @@ export function applyInteractiveSearchOrderPatch(
           if (!this.pendingTools.has(content.id)) {
             const component = new ToolExecutionComponent(
               content.name,
+              content.id,
               content.arguments,
               { showImages: this.settingsManager.getShowImages() },
               this.getRegisteredToolDefinition(content.name),

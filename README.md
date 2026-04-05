@@ -1,6 +1,6 @@
 # pi-openai-search
 
-POC extension для `gsd` / `pi`, который включает нативный `web_search` tool у OpenAI Responses API и старается сохранить truthful UX без synthetic fallback.
+POC extension для `pi` / `gsd`, который включает нативный `web_search` tool у OpenAI Responses API и старается сохранить truthful UX без synthetic fallback.
 
 Это не Brave, не Tavily и не отдельный поисковый tool. Extension делает то же базовое действие, что и Codex CLI:
 
@@ -14,7 +14,7 @@ POC extension для `gsd` / `pi`, который включает нативн�
 
 ## Для твоего случая
 
-Если `gsd` использует встроенный provider `openai` с override `baseUrl` на proxy и transport `openai-responses`, extension попадает ровно в нужную точку.
+Если `pi` использует встроенный provider `openai` с override `baseUrl` на proxy и transport `openai-responses`, extension попадает ровно в нужную точку.
 
 ## Что делает
 
@@ -34,7 +34,7 @@ POC extension для `gsd` / `pi`, который включает нативн�
   - `webSearchResult` для завершённого native search
   - добавленные в текст citations, если OpenAI вернул structured annotations, которых ещё нет в тексте
 - не подмешивает скрытые developer prompts для управления reasoning
-- патчит interactive/replay renderer `gsd-pi` только как optional compat-слой: если приватный upstream runtime изменился, extension деградирует в safe fallback без падения на import
+- патчит interactive/replay renderer standalone `pi` и legacy `gsd-pi` через compat-слой: если upstream runtime изменился, extension деградирует в safe fallback без падения на import
 - truthful query label обновляется из реального provider payload, если query появляется позже в completed response; если query нет, UI честно показывает нейтральный label без synthetic fallback
 
 ## Ограничения POC
@@ -53,7 +53,7 @@ POC extension для `gsd` / `pi`, который включает нативн�
 ## Быстрый запуск
 
 ```bash
-gsd --extension ~/hobby/pi-openai-search
+pi --extension ~/hobby/pi-openai-search
 ```
 
 Разовая live-проверка:
@@ -61,7 +61,7 @@ gsd --extension ~/hobby/pi-openai-search
 ```bash
 PI_OPENAI_NATIVE_SEARCH=1 \
 PI_OPENAI_NATIVE_SEARCH_MODE=live \
-  gsd --extension ~/hobby/pi-openai-search --mode text --print --no-session \
+  pi --extension ~/hobby/pi-openai-search --mode text --print --no-session \
   --model openai/gpt-5.4 \
   'Найди свежие заметки про OpenAI Responses API web_search и кратко перескажи с источниками.'
 ```
@@ -97,9 +97,12 @@ PI_OPENAI_NATIVE_SEARCH_MODE=live \
 
 ### Compat-слои
 
+- `PI_BIN_PATH=/abs/path/to/pi`
+  - optional
+  - приоритетный путь к standalone `pi` binary для compat/runtime autodiscovery
 - `GSD_BIN_PATH=/abs/path/to/gsd`
   - optional
-  - если не задан, extension пытается сам найти `gsd` через `PATH`
+  - fallback для legacy `gsd` runtime
 - `PI_OPENAI_NATIVE_SEARCH_INTERACTIVE_COMPAT=true|false`
   - default: `true`
   - включает inline search-order patch для interactive/replay UI
@@ -123,11 +126,19 @@ PI_OPENAI_NATIVE_SEARCH_MODE=live \
 GSD_BIN_PATH="$(command -v gsd)" npm test
 ```
 
-## Глобальное включение в gsd
+## Глобальное включение в pi
 
-### Рекомендуемый вариант: через global settings
+### Рекомендуемый вариант: через global extensions dir
 
-Добавь extension в `~/.gsd/agent/settings.json`:
+Для standalone `pi` удобнее положить symlink в `~/.pi/agent/extensions/`:
+
+```bash
+ln -s ~/hobby/pi-openai-search ~/.pi/agent/extensions/pi-openai-search
+```
+
+### Альтернатива: через global settings
+
+Можно добавить абсолютный путь в `~/.pi/agent/settings.json`:
 
 ```json
 {
@@ -137,15 +148,13 @@ GSD_BIN_PATH="$(command -v gsd)" npm test
   "quietStartup": true,
   "collapseChangelog": true,
   "hideThinkingBlock": true,
-  "extensions": [
-    "~/hobby/pi-openai-search"
-  ]
+  "extensions": ["/home/you/hobby/pi-openai-search"]
 }
 ```
 
-### Альтернатива: через global extensions dir
+## Legacy gsd
 
-Можно положить symlink в `~/.gsd/agent/extensions/`, и тогда `gsd` подхватит package автоматически:
+Если нужен старый `gsd`, можно по-прежнему положить symlink в `~/.gsd/agent/extensions/`:
 
 ```bash
 ln -s ~/hobby/pi-openai-search ~/.gsd/agent/extensions/pi-openai-search
@@ -156,7 +165,7 @@ ln -s ~/hobby/pi-openai-search ~/.gsd/agent/extensions/pi-openai-search
 ### cached mode
 
 ```bash
-PI_OPENAI_NATIVE_SEARCH_MODE=cached gsd --extension ~/hobby/pi-openai-search
+PI_OPENAI_NATIVE_SEARCH_MODE=cached pi --extension ~/hobby/pi-openai-search
 ```
 
 ### live mode только по доменам
@@ -164,7 +173,7 @@ PI_OPENAI_NATIVE_SEARCH_MODE=cached gsd --extension ~/hobby/pi-openai-search
 ```bash
 PI_OPENAI_NATIVE_SEARCH_MODE=live \
 PI_OPENAI_NATIVE_SEARCH_ALLOWED_DOMAINS=platform.openai.com,developers.openai.com \
-  gsd --extension ~/hobby/pi-openai-search
+  pi --extension ~/hobby/pi-openai-search
 ```
 
 ## Что нужно от proxy

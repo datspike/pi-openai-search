@@ -11,9 +11,14 @@ import {
   extractInlineSourcesFromText,
   extractResultSources,
 } from "../src/openai-search-display.js";
-import { resolveGsdBinPath } from "../src/gsd-pi-compat.js";
+import {
+  importRuntimeModule,
+  resolveAgentBinPath,
+  resolveRuntimeDescriptor,
+} from "../src/gsd-pi-compat.js";
 
 export const DEFAULT_PROOF_MODEL = "openai/gpt-5.4";
+export const DEFAULT_PI_AGENT_DIR = path.join(os.homedir(), ".pi", "agent");
 export const DEFAULT_GSD_AGENT_DIR = path.join(os.homedir(), ".gsd", "agent");
 export const JSONL_VERIFIER_MAX_BUFFER = 1024 * 1024;
 export const JSONL_VERIFIER_TIMEOUT_MS = 240_000;
@@ -231,57 +236,64 @@ export function parseModelRef(modelRef) {
 }
 
 /**
- * Получение системных путей для доступа к gsd-pi runtime.
+ * Получение системных путей для доступа к установленному runtime.
  *
- * @returns {{agentDir: string, authPath: string, modelsPath: string, gsdRoot: string}} Набор путей.
+ * @returns {{agentDir: string, authPath: string, modelsPath: string, runtimeRoot: string, runtimeKind: "pi" | "gsd", binPath: string}} Набор путей.
  */
 export function resolveRuntimePaths() {
-  let gsdBinPath;
+  let runtimeDescriptor;
   try {
-    gsdBinPath = resolveGsdBinPath();
+    runtimeDescriptor = resolveRuntimeDescriptor();
   } catch (error) {
     throw new SearchProofError(
-      "missing_gsd_bin_path",
-      "Не удалось определить путь к gsd binary; raw probe не может загрузить gsd-pi runtime.",
+      "missing_runtime_bin_path",
+      "Не удалось определить путь к pi/gsd binary; raw probe не может загрузить runtime.",
       {
         cause: error instanceof Error ? error.message : String(error),
       },
     );
   }
 
-  const gsdRoot = path.resolve(path.dirname(gsdBinPath), "..", "lib", "node_modules", "gsd-pi");
-  if (!fs.existsSync(gsdRoot)) {
+  if (!fs.existsSync(runtimeDescriptor.root)) {
     throw new SearchProofError(
-      "missing_gsd_root",
-      `Корень установленного gsd-pi не найден: ${gsdRoot}`,
-      { gsdRoot },
+      "missing_runtime_root",
+      `Корень установленного runtime не найден: ${runtimeDescriptor.root}`,
+      { runtimeRoot: runtimeDescriptor.root, runtimeKind: runtimeDescriptor.kind },
     );
   }
 
-  const agentDir = process.env.PI_AGENT_DIR ? path.resolve(process.env.PI_AGENT_DIR) : DEFAULT_GSD_AGENT_DIR;
+  const defaultAgentDir =
+    process.env.PI_AGENT_DIR != null
+      ? path.resolve(process.env.PI_AGENT_DIR)
+      : fs.existsSync(DEFAULT_PI_AGENT_DIR)
+        ? DEFAULT_PI_AGENT_DIR
+        : DEFAULT_GSD_AGENT_DIR;
+
+  const agentDir = defaultAgentDir;
   return {
     agentDir,
     authPath: path.join(agentDir, "auth.json"),
     modelsPath: path.join(agentDir, "models.json"),
-    gsdRoot,
+    runtimeRoot: runtimeDescriptor.root,
+    runtimeKind: runtimeDescriptor.kind,
+    binPath: runtimeDescriptor.binPath,
   };
 }
 
 /**
- * Загрузка модели и OpenAI client через тот же runtime, что использует gsd.
+ * Загрузка модели и OpenAI client через тот же runtime, что использует pi/gsd.
  *
  * @param {string} modelRef Model ref формата `provider/modelId`.
  * @returns {Promise<{model: any, client: any, agentDir: string}>} Модель, client и путь к agent dir.
  */
 export async function loadModelClient(modelRef) {
-  const { agentDir, authPath, gsdRoot, modelsPath } = resolveRuntimePaths();
+  const { agentDir, authPath, modelsPath } = resolveRuntimePaths();
   const { provider, modelId } = parseModelRef(modelRef);
 
-  const [{ AuthStorage }, { ModelRegistry }, { createOpenAIClient }, piAi] = await Promise.all([
-    import(pathToFileURL(path.join(gsdRoot, "packages/pi-coding-agent/dist/core/auth-storage.js")).href),
-    import(pathToFileURL(path.join(gsdRoot, "packages/pi-coding-agent/dist/core/model-registry.js")).href),
-    import(pathToFileURL(path.join(gsdRoot, "packages/pi-ai/dist/providers/openai-shared.js")).href),
-    import(pathToFileURL(path.join(gsdRoot, "packages/pi-ai/dist/index.js")).href),
+  const [{ AuthStorage }, { ModelRegistry }, piAi] = await Promise.all([
+    importRuntimeModule("packages/pi-coding-agent/dist/core/auth-storage.js"),
+    importRuntimeModule("packages/pi-coding-agent/dist/core/model-registry.js"),
+    importRuntimeModule("packages/pi-ai/dist/index.js"),
   ]);
 
   const authStorage = AuthStorage.create(authPath);
@@ -295,12 +307,10 @@ export async function loadModelClient(modelRef) {
     );
   }
 
-  const credentials = authStorage.getCredentialsForProvider(provider);
-  const preferredCredential = Array.isArray(credentials) ? credentials.find(Boolean) : undefined;
-  const resolvedCredentialKey = preferredCredential
-    ? await authStorage.resolveCredentialApiKey(provider, preferredCredential)
-    : undefined;
-  const apiKey = resolvedCredentialKey || piAi.getEnvApiKey(provider) || process.env.OPENAI_API_KEY;
+  const apiKey =
+    await resolveProviderApiKey(authStorage, provider) ||
+    piAi.getEnvApiKey(provider) ||
+    process.env.OPENAI_API_KEY;
   if (!apiKey) {
     throw new SearchProofError(
       "missing_api_key",
@@ -309,8 +319,46 @@ export async function loadModelClient(modelRef) {
     );
   }
 
-  const client = await createOpenAIClient(model, {}, apiKey, {});
+  let client;
+  try {
+    const { createOpenAIClient } = await importRuntimeModule("packages/pi-ai/dist/providers/openai-shared.js");
+    client = await createOpenAIClient(model, {}, apiKey, {});
+  } catch {
+    const openAiModule = await importRuntimeModule("node_modules/openai/index.mjs");
+    client = new openAiModule.default({
+      apiKey,
+      baseURL: model.baseUrl,
+      dangerouslyAllowBrowser: true,
+      defaultHeaders: model.headers || {},
+    });
+  }
+
   return { model, client, agentDir };
+}
+
+/**
+ * Разрешение API key для провайдера через новый или legacy auth API runtime.
+ *
+ * @param {any} authStorage Экземпляр auth storage runtime.
+ * @param {string} provider Идентификатор провайдера.
+ * @returns {Promise<string | undefined>} Найденный API key.
+ */
+export async function resolveProviderApiKey(authStorage, provider) {
+  if (authStorage && typeof authStorage.getApiKey === "function") {
+    return authStorage.getApiKey(provider);
+  }
+
+  const credentials =
+    authStorage && typeof authStorage.getCredentialsForProvider === "function"
+      ? authStorage.getCredentialsForProvider(provider)
+      : undefined;
+  const preferredCredential = Array.isArray(credentials) ? credentials.find(Boolean) : undefined;
+
+  if (preferredCredential && typeof authStorage.resolveCredentialApiKey === "function") {
+    return authStorage.resolveCredentialApiKey(provider, preferredCredential);
+  }
+
+  return undefined;
 }
 
 /**
@@ -738,17 +786,18 @@ export function classifyRawResponse(response, scenario) {
 }
 
 /**
- * Сборка gsd CLI команды для no-session verifier harness.
+ * Сборка CLI-команды для no-session verifier harness.
  *
  * @param {{extensionPath: string, modelRef: string, scenario: "A" | "B"}} params Параметры запуска.
  * @returns {string} Shell-команда для `sh -lc`.
  */
 export function buildVerifierCommand({ extensionPath, modelRef, scenario }) {
   const prompt = SEARCH_PROOF_SCENARIOS[scenario].prompt;
+  const binPath = resolveAgentBinPath();
   return [
     `PI_OPENAI_NATIVE_SEARCH=1`,
     `PI_OPENAI_NATIVE_SEARCH_MODE=live`,
-    `gsd --extension ${shellQuote(extensionPath)} --mode json --print --no-session --model ${shellQuote(modelRef)} ${shellQuote(prompt)}`,
+    `${shellQuote(binPath)} --extension ${shellQuote(extensionPath)} --mode json --print --no-session --model ${shellQuote(modelRef)} ${shellQuote(prompt)}`,
   ].join(" ");
 }
 

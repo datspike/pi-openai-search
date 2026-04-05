@@ -410,6 +410,41 @@ export function formatWebSearchResultStatus(content) {
 }
 
 /**
+ * Форматирование content webSearchResult для inline tool output.
+ *
+ * @param {unknown} content Content webSearchResult.
+ * @returns {string} Текстовый вывод для TUI.
+ */
+export function formatWebSearchResult(content) {
+  if (Array.isArray(content)) {
+    const lines = content
+      .filter((item) => item?.type === "web_search_result")
+      .map((item) => {
+        const title = String(item?.title || item?.url || "").trim();
+        const url = String(item?.url || "").trim();
+        if (!url) {
+          return "";
+        }
+        return title && title !== url ? `${title}: ${url}` : url;
+      })
+      .filter(Boolean);
+
+    return lines.join("\n");
+  }
+
+  if (content && typeof content === "object" && "type" in content) {
+    if (content.type === "web_search_tool_result_error") {
+      return String(content.message || content.error || "Web search failed").trim();
+    }
+    if (content.type === "web_search_tool_result_complete") {
+      return "Search complete";
+    }
+  }
+
+  return "";
+}
+
+/**
  * Извлечение lifecycle update только из реальных search stream events.
  *
  * @param {any} assistantMessageEvent Event из `message_update`.

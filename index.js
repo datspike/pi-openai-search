@@ -177,11 +177,13 @@ export default function registerOpenAISearchExtension(pi) {
 
   let lastStatusKey;
   let nativeReadyStatus;
+  let selectedModel;
   const activeSearches = new Map();
 
   pi.on("model_select", async (event, ctx) => {
     const config = loadNativeSearchConfig();
     const model = event?.model;
+    selectedModel = model;
 
     if (!model || !ctx?.hasUI) {
       return;
@@ -235,11 +237,12 @@ export default function registerOpenAISearchExtension(pi) {
     }
 
     const config = loadNativeSearchConfig();
-    const nextPayload = injectNativeWebSearch(payload, event?.model, config);
+    const model = event?.model || selectedModel;
+    const nextPayload = injectNativeWebSearch(payload, model, config);
 
     const debugPath = process.env.PI_OPENAI_NATIVE_SEARCH_DEBUG_FILE;
     if (debugPath) {
-      void writeDebugSnapshot(debugPath, event?.model, nextPayload).catch(() => {
+      void writeDebugSnapshot(debugPath, model, nextPayload).catch(() => {
         // best-effort debug snapshot without runtime impact
       });
     }

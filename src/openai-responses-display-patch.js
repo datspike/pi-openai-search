@@ -1,11 +1,4 @@
 import {
-  AssistantMessageEventStream,
-  getEnvApiKey,
-  registerApiProvider,
-  supportsXhigh,
-} from "@gsd/pi-ai";
-
-import {
   appendStructuredCitations,
   buildWebSearchResultContent,
   dedupeSources,
@@ -16,6 +9,12 @@ import {
 } from "./openai-search-display.js";
 import { appendUniqueIncludeField } from "./openai-native-search.js";
 import { importGsdPiModule } from "./gsd-pi-compat.js";
+import {
+  AssistantMessageEventStream,
+  getEnvApiKey,
+  registerApiProvider,
+  supportsXhigh,
+} from "./pi-ai-compat.js";
 
 const OPENAI_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex", "opencode"]);
 
@@ -64,16 +63,11 @@ async function loadPiAiInternals() {
   if (!internalsPromise) {
     internalsPromise = Promise.all([
       importGsdPiModule("packages/pi-ai/dist/providers/openai-responses-shared.js"),
-      importGsdPiModule("packages/pi-ai/dist/providers/openai-shared.js"),
-    ]).then(([responsesShared, openaiShared]) => ({
+      importGsdPiModule("node_modules/openai/index.mjs"),
+    ]).then(([responsesShared, openAiModule]) => ({
       convertResponsesMessages: responsesShared.convertResponsesMessages,
       convertResponsesTools: responsesShared.convertResponsesTools,
-      createOpenAIClient: openaiShared.createOpenAIClient,
-      buildInitialOutput: openaiShared.buildInitialOutput,
-      assertStreamSuccess: openaiShared.assertStreamSuccess,
-      finalizeStream: openaiShared.finalizeStream,
-      handleStreamError: openaiShared.handleStreamError,
-      clampReasoningForModel: openaiShared.clampReasoningForModel,
+      OpenAI: openAiModule.default,
     }));
   }
 
@@ -156,7 +150,9 @@ export function buildPatchedParams(model, context, options, internals) {
   if (model.reasoning) {
     appendUniqueIncludeField(params, "reasoning.encrypted_content");
     if (requestedReasoningEffort || requestedReasoningSummary) {
-      const effort = internals.clampReasoningForModel(model.name, requestedReasoningEffort || "medium");
+      const effort = supportsXhigh(model)
+        ? requestedReasoningEffort || "medium"
+        : clampReasoning(requestedReasoningEffort || "medium");
       params.reasoning = {
         effort: effort || "medium",
         summary: requestedReasoningSummary || "auto",
@@ -165,6 +161,113 @@ export function buildPatchedParams(model, context, options, internals) {
   }
 
   return params;
+}
+
+/**
+ * Базовый assistant output до старта stream.
+ *
+ * @param {any} model Модель.
+ * @returns {any} Начальное сообщение.
+ */
+function buildInitialOutput(model) {
+  return {
+    role: "assistant",
+    content: [],
+    api: model.api,
+    provider: model.provider,
+    model: model.id,
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp: Date.now(),
+  };
+}
+
+/**
+ * Создание OpenAI client через runtime-local dependency.
+ *
+ * @param {any} model Модель.
+ * @param {string | undefined} apiKey Ключ API.
+ * @param {{optionsHeaders?: Record<string, string> | undefined, OpenAI: any}} internals Runtime internals.
+ * @param {Record<string, string> | undefined} optionsHeaders Дополнительные заголовки.
+ * @returns {any} OpenAI client.
+ */
+function createOpenAIClient(model, apiKey, internals, optionsHeaders) {
+  const resolvedApiKey = apiKey || process.env.OPENAI_API_KEY;
+  if (!resolvedApiKey) {
+    throw new Error(`No API key for provider: ${model.provider}`);
+  }
+
+  const defaultHeaders = {
+    ...(model.headers || {}),
+    ...(optionsHeaders || {}),
+  };
+
+  return new internals.OpenAI({
+    apiKey: resolvedApiKey,
+    baseURL: model.baseUrl,
+    dangerouslyAllowBrowser: true,
+    defaultHeaders,
+  });
+}
+
+/**
+ * Проверка успешного завершения patched stream.
+ *
+ * @param {any} output Финальное сообщение.
+ * @param {AbortSignal | undefined} signal Abort signal.
+ * @returns {void}
+ */
+function assertStreamSuccess(output, signal) {
+  if (signal?.aborted) {
+    throw new Error("Request was aborted");
+  }
+
+  if (output.stopReason === "aborted") {
+    throw new Error("Request was aborted");
+  }
+
+  if (output.stopReason === "error") {
+    throw new Error(output.errorMessage || "An unknown error occurred");
+  }
+}
+
+/**
+ * Успешное завершение event stream.
+ *
+ * @param {any} stream Event stream.
+ * @param {any} output Финальное сообщение.
+ * @returns {void}
+ */
+function finalizeStream(stream, output) {
+  stream.push({ type: "done", reason: output.stopReason, message: output });
+  stream.end();
+}
+
+/**
+ * Унифицированная обработка ошибок patched provider.
+ *
+ * @param {any} stream Event stream.
+ * @param {any} output Финальное сообщение.
+ * @param {unknown} error Ошибка.
+ * @param {AbortSignal | undefined} signal Abort signal.
+ * @returns {void}
+ */
+function handleStreamError(stream, output, error, signal) {
+  for (const block of output.content) {
+    delete block.index;
+  }
+
+  output.stopReason = signal?.aborted ? "aborted" : "error";
+  output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+  stream.push({ type: "error", reason: output.stopReason, error: output });
+  stream.end();
 }
 
 /**
@@ -788,13 +891,11 @@ export const streamPatchedOpenAIResponses = (model, context, options) => {
 
   (async () => {
     const internals = await loadPiAiInternals();
-    const output = internals.buildInitialOutput(model);
+    const output = buildInitialOutput(model);
 
     try {
       const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
-      const client = await internals.createOpenAIClient(model, context, apiKey, {
-        optionsHeaders: options?.headers,
-      });
+      const client = createOpenAIClient(model, apiKey, internals, options?.headers);
       let params = buildPatchedParams(model, context, options, internals);
       const nextParams = await options?.onPayload?.(params, model);
       if (nextParams !== undefined) {
@@ -805,10 +906,10 @@ export const streamPatchedOpenAIResponses = (model, context, options) => {
       await processResponsesStreamWithSearchDisplay(openaiStream, output, stream, model, {
         serviceTier: options?.serviceTier,
       });
-      internals.assertStreamSuccess(output, options?.signal);
-      internals.finalizeStream(stream, output);
+      assertStreamSuccess(output, options?.signal);
+      finalizeStream(stream, output);
     } catch (error) {
-      internals.handleStreamError(stream, output, error, options?.signal);
+      handleStreamError(stream, output, error, options?.signal);
     }
   })().catch((error) => {
     const fallbackOutput = {
