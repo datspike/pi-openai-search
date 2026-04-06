@@ -1,5 +1,7 @@
 import { isOpenAIResponsesModel } from "../config/native-search-config.js";
 
+export { isOpenAIResponsesModel };
+
 export const CUSTOM_SEARCH_TOOL_NAMES = new Set([
   "search-the-web",
   "search_and_read",
