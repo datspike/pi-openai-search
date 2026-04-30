@@ -89,6 +89,7 @@ function attachInlineSearchRenderContext(component, host) {
       ? host.formatWebSearchResult.bind(host)
       : formatInlineWebSearchResult,
     getShowImages: () => host.settingsManager?.getShowImages?.() ?? true,
+    getCwd: () => host.sessionManager?.getCwd?.(),
   };
 
   if (typeof component.setExpanded === "function") {
@@ -159,6 +160,7 @@ function buildInlineWebSearchComponent(assistantComponent, ToolExecutionComponen
     { showImages },
     undefined,
     ui,
+    renderContext.getCwd?.(),
   );
 
   component.setExpanded(Boolean(assistantComponent[INLINE_SEARCH_EXPANDED]));
@@ -320,6 +322,7 @@ function renderSessionContextWithInlineSearch(host, sessionContext, options = {}
             { showImages: host.settingsManager.getShowImages() },
             host.getRegisteredToolDefinition(content.name),
             host.ui,
+            host.sessionManager.getCwd(),
           );
           component.setExpanded(host.toolOutputExpanded);
           host.chatContainer.addChild(component);
@@ -433,6 +436,7 @@ export function applyInteractiveSearchOrderPatch(
               { showImages: this.settingsManager.getShowImages() },
               this.getRegisteredToolDefinition(content.name),
               this.ui,
+              this.sessionManager.getCwd(),
             );
             component.setExpanded(this.toolOutputExpanded);
             this.chatContainer.addChild(component);
