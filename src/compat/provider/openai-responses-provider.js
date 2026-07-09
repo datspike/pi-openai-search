@@ -2,10 +2,54 @@ import {
   COMPAT_FEATURES,
   createCompatFeatureStatus,
 } from "../runtime/pi-compat-capabilities.js";
-import { registerApiProvider } from "../runtime/pi-ai-compat.js";
+import * as piAiCompat from "../runtime/pi-ai-compat.js";
+import { loadOpenAIResponsesInternals } from "./openai-responses-client.js";
 import { streamPatchedOpenAIResponses, streamSimplePatchedOpenAIResponses } from "./openai-responses-stream.js";
 
 let providerRegistered = false;
+
+function validateOpenAIResponsesInternals(internals) {
+  return typeof internals?.convertResponsesMessages === "function"
+    && typeof internals?.convertResponsesTools === "function"
+    && typeof internals?.OpenAI === "function";
+}
+
+async function probeOpenAIResponsesInternals(loadInternals = loadOpenAIResponsesInternals) {
+  try {
+    const internals = await loadInternals();
+    if (!validateOpenAIResponsesInternals(internals)) {
+      return {
+        ok: false,
+        reason: "OpenAI Responses internals недоступны; provider compat не активирован",
+        diagnostic: "loadOpenAIResponsesInternals вернул неполный набор зависимостей.",
+      };
+    }
+    return { ok: true };
+  } catch (error) {
+    const diagnostic = error instanceof Error ? error.message : String(error);
+    return {
+      ok: false,
+      reason: "OpenAI Responses internals недоступны; provider compat не активирован",
+      diagnostic,
+    };
+  }
+}
+
+function resolvePiAiCompat(options = {}) {
+  return options.piAiCompat || piAiCompat;
+}
+
+function probePiAiProviderCompat(compat = piAiCompat) {
+  if (compat.supportsPiAiProviderCompat?.() === true || compat.hasPiAiProviderCompat === true) {
+    return { ok: true };
+  }
+
+  return {
+    ok: false,
+    reason: "pi-ai compat для provider stream недоступен; provider compat не активирован",
+    diagnostic: "Нужны AssistantMessageEventStream, getEnvApiKey и supportsXhigh из pi-ai compat.",
+  };
+}
 
 /**
  * Конфиг provider registration для session-safe extension pipeline.
@@ -27,14 +71,33 @@ export function buildPatchedOpenAIResponsesProviderConfig() {
  * @param {any} pi Экземпляр pi runtime.
  * @returns {Promise<{feature: string, enabled: boolean, status: string, supported: boolean, reason?: string, diagnostics: string[]}>} Статус compat-фичи.
  */
-export async function probeProviderCompatCapability(pi) {
+export async function probeProviderCompatCapability(pi, options = {}) {
+  const internalsProbe = await probeOpenAIResponsesInternals(options.loadOpenAIResponsesInternals);
+  if (!internalsProbe.ok) {
+    return createCompatFeatureStatus(COMPAT_FEATURES.providerCompat, {
+      supported: false,
+      reason: internalsProbe.reason,
+      diagnostics: [internalsProbe.diagnostic],
+    });
+  }
+
+  const compatProbe = probePiAiProviderCompat(resolvePiAiCompat(options));
+  if (!compatProbe.ok) {
+    return createCompatFeatureStatus(COMPAT_FEATURES.providerCompat, {
+      supported: false,
+      reason: compatProbe.reason,
+      diagnostics: [compatProbe.diagnostic],
+    });
+  }
+
+  const compat = resolvePiAiCompat(options);
   if (typeof pi?.registerProvider === "function") {
     return createCompatFeatureStatus(COMPAT_FEATURES.providerCompat, {
       supported: true,
     });
   }
 
-  if (typeof registerApiProvider === "function") {
+  if (typeof compat.registerApiProvider === "function") {
     return createCompatFeatureStatus(COMPAT_FEATURES.providerCompat, {
       supported: true,
       status: "partial",
@@ -51,14 +114,17 @@ export async function probeProviderCompatCapability(pi) {
 /**
  * Регистрация patched provider поверх встроенного openai-responses.
  *
- * @returns {void}
+ * @returns {boolean} true, если private patch зарегистрирован или уже был активен.
  */
-export function registerOpenAIResponsesDisplayPatch() {
+export function registerOpenAIResponsesDisplayPatch(compat = piAiCompat) {
   if (providerRegistered) {
-    return;
+    return true;
+  }
+  if (typeof compat.registerApiProvider !== "function") {
+    return false;
   }
 
-  registerApiProvider(
+  compat.registerApiProvider(
     {
       api: "openai-responses",
       stream: streamPatchedOpenAIResponses,
@@ -67,6 +133,7 @@ export function registerOpenAIResponsesDisplayPatch() {
     "pi-openai-search",
   );
   providerRegistered = true;
+  return true;
 }
 
 /**
@@ -76,18 +143,29 @@ export function registerOpenAIResponsesDisplayPatch() {
  * @param {{features?: Record<string, {supported?: boolean}>}} capabilitySummary Capability summary.
  * @returns {Promise<boolean>} true, если активация выполнена.
  */
-export async function activateProviderCompat(pi, capabilitySummary) {
+export async function activateProviderCompat(pi, capabilitySummary, options = {}) {
   const feature = capabilitySummary?.features?.[COMPAT_FEATURES.providerCompat];
   if (!feature?.supported) {
     return false;
   }
 
+  const internalsProbe = await probeOpenAIResponsesInternals(options.loadOpenAIResponsesInternals);
+  if (!internalsProbe.ok) {
+    return false;
+  }
+
+  const compat = resolvePiAiCompat(options);
+  if (!probePiAiProviderCompat(compat).ok) {
+    return false;
+  }
+
   // session/runtime patching нужен даже когда публичный provider override доступен
-  registerOpenAIResponsesDisplayPatch();
+  const privatePatchRegistered = registerOpenAIResponsesDisplayPatch(compat);
 
   if (typeof pi?.registerProvider === "function") {
     pi.registerProvider("openai", buildPatchedOpenAIResponsesProviderConfig());
+    return true;
   }
 
-  return true;
+  return privatePatchRegistered;
 }

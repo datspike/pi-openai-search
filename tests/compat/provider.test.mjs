@@ -7,13 +7,91 @@ import {
 } from "../../src/compat/provider/openai-responses-provider.js";
 import { COMPAT_FEATURES } from "../../src/compat/runtime/pi-compat-capabilities.js";
 
+const workingInternals = {
+  convertResponsesMessages() {},
+  convertResponsesTools() {},
+  OpenAI: class OpenAI {},
+};
+
+function loadWorkingInternals() {
+  return workingInternals;
+}
+
+const workingPiAiCompat = {
+  hasPiAiProviderCompat: true,
+  AssistantMessageEventStream: class AssistantMessageEventStream {},
+  getEnvApiKey() {},
+  supportsXhigh() {},
+};
+
+const missingPiAiCompat = {
+  hasPiAiProviderCompat: false,
+  AssistantMessageEventStream: class AssistantMessageEventStream {
+    constructor() {
+      throw new Error("stub must not count as compat");
+    }
+  },
+  getEnvApiKey() {},
+  supportsXhigh() {
+    return false;
+  },
+};
+
 test("provider compat probe accepts public registerProvider path", async () => {
-  const result = await probeProviderCompatCapability({
-    registerProvider() {},
-  });
+  const result = await probeProviderCompatCapability(
+    {
+      registerProvider() {},
+    },
+    {
+      loadOpenAIResponsesInternals: loadWorkingInternals,
+      piAiCompat: workingPiAiCompat,
+    },
+  );
 
   assert.equal(result.feature, COMPAT_FEATURES.providerCompat);
   assert.equal(result.supported, true);
+});
+
+test("provider compat probe rejects throwing pi-ai compat stubs", async () => {
+  const result = await probeProviderCompatCapability(
+    {
+      registerProvider() {
+        throw new Error("should not run");
+      },
+    },
+    {
+      loadOpenAIResponsesInternals: loadWorkingInternals,
+      piAiCompat: missingPiAiCompat,
+    },
+  );
+
+  assert.equal(result.supported, false);
+  assert.match(result.reason, /pi-ai compat/);
+});
+
+test("provider compat activation does not register when pi-ai compat is missing", async () => {
+  let registrations = 0;
+  const applied = await activateProviderCompat(
+    {
+      registerProvider() {
+        registrations += 1;
+      },
+    },
+    {
+      features: {
+        [COMPAT_FEATURES.providerCompat]: {
+          supported: true,
+        },
+      },
+    },
+    {
+      loadOpenAIResponsesInternals: loadWorkingInternals,
+      piAiCompat: missingPiAiCompat,
+    },
+  );
+
+  assert.equal(applied, false);
+  assert.equal(registrations, 0);
 });
 
 test("provider compat activation respects capability matrix", async () => {
@@ -30,6 +108,10 @@ test("provider compat activation respects capability matrix", async () => {
           supported: true,
         },
       },
+    },
+    {
+      loadOpenAIResponsesInternals: loadWorkingInternals,
+      piAiCompat: workingPiAiCompat,
     },
   );
 
@@ -58,4 +140,49 @@ test("provider compat activation skips unsupported feature", async () => {
   );
 
   assert.equal(applied, false);
+});
+
+test("provider compat probe reports unsupported when internals are missing", async () => {
+  const result = await probeProviderCompatCapability(
+    {
+      registerProvider() {
+        throw new Error("should not run");
+      },
+    },
+    {
+      loadOpenAIResponsesInternals: async () => {
+        throw new Error("moved module missing");
+      },
+    },
+  );
+
+  assert.equal(result.supported, false);
+  assert.match(result.reason, /internals/);
+  assert.match(result.diagnostics[0], /moved module missing/);
+});
+
+test("provider compat activation does not register when internals are missing", async () => {
+  let registrations = 0;
+  const applied = await activateProviderCompat(
+    {
+      registerProvider() {
+        registrations += 1;
+      },
+    },
+    {
+      features: {
+        [COMPAT_FEATURES.providerCompat]: {
+          supported: true,
+        },
+      },
+    },
+    {
+      loadOpenAIResponsesInternals: async () => {
+        throw new Error("missing internals");
+      },
+    },
+  );
+
+  assert.equal(applied, false);
+  assert.equal(registrations, 0);
 });

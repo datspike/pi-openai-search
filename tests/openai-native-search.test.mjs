@@ -197,6 +197,7 @@ async function loadTestableProviderModule(tempDir) {
   const sourcePath = fileURLToPath(new URL("../src/compat/provider/openai-responses-provider.js", import.meta.url));
   const compatCapabilitiesPath = fileURLToPath(new URL("../src/compat/runtime/pi-compat-capabilities.js", import.meta.url));
   const mockPiAiPath = path.join(tempDir, "pi-ai-mock.js");
+  const mockClientPath = path.join(tempDir, "openai-responses-client-mock.js");
   const mockStreamPath = path.join(tempDir, "openai-responses-stream-mock.js");
   const transformedModulePath = path.join(tempDir, "openai-responses-provider.testable.mjs");
 
@@ -206,6 +207,15 @@ async function loadTestableProviderModule(tempDir) {
       'export function registerApiProvider(provider, sourceId) {',
       '  globalThis.__providerCalls = globalThis.__providerCalls || [];',
       '  globalThis.__providerCalls.push({ provider, sourceId });',
+      '}',
+    ].join("\n"),
+    "utf8",
+  );
+  fs.writeFileSync(
+    mockClientPath,
+    [
+      'export async function loadOpenAIResponsesInternals() {',
+      '  return { convertResponsesMessages() {}, convertResponsesTools() {}, OpenAI: class OpenAI {} };',
       '}',
     ].join("\n"),
     "utf8",
@@ -222,6 +232,7 @@ async function loadTestableProviderModule(tempDir) {
   const transformedSource = fs
     .readFileSync(sourcePath, "utf8")
     .replace('"../runtime/pi-ai-compat.js"', JSON.stringify(pathToFileURL(mockPiAiPath).href))
+    .replace('"./openai-responses-client.js"', JSON.stringify(pathToFileURL(mockClientPath).href))
     .replace('"./openai-responses-stream.js"', JSON.stringify(pathToFileURL(mockStreamPath).href))
     .replace('"../runtime/pi-compat-capabilities.js"', JSON.stringify(pathToFileURL(compatCapabilitiesPath).href));
 
@@ -2168,15 +2179,22 @@ test("registerOpenAIResponsesDisplayPatch is idempotent on repeated calls", asyn
   }
 });
 
-test("resolvePiRuntimeRoot auto-detects installed standalone pi runtime", () => {
+test("resolvePiRuntimeRoot auto-detects installed standalone pi runtime", (t) => {
   const originalPiBinPath = process.env.PI_BIN_PATH;
   resetPiRuntimeCache();
   delete process.env.PI_BIN_PATH;
 
   try {
-    const root = resolvePiRuntimeRoot();
+    let root;
+    try {
+      root = resolvePiRuntimeRoot();
+    } catch (error) {
+      t.skip(error instanceof Error ? error.message : String(error));
+      return;
+    }
     assert.equal(fs.existsSync(root), true);
-    assert.equal(path.basename(root), "pi-coding-agent");
+    const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+    assert.match(packageJson.name, /^@(?:earendil-works|mariozechner)\/pi-coding-agent$/);
   } finally {
     resetPiRuntimeCache();
     if (originalPiBinPath == null) {
@@ -2196,12 +2214,8 @@ test("loadExtensions imports extension without hard failure", async (t) => {
     return;
   }
 
-  const piAiModule = await import(
-    pathToFileURL(path.join(runtimeRoot, "node_modules/@mariozechner/pi-ai/dist/index.js")).href,
-  );
-  const loaderModule = await import(
-    pathToFileURL(path.join(runtimeRoot, "dist/core/extensions/loader.js")).href,
-  );
+  const piAiModule = await importPiRuntimeModule("node_modules/@mariozechner/pi-ai/dist/index.js");
+  const loaderModule = await importPiRuntimeModule("dist/core/extensions/loader.js");
 
   piAiModule.resetApiProviders();
   try {

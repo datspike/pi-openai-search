@@ -1,4 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
@@ -12,8 +13,77 @@ import {
   summarizeCompatStatus,
 } from "./pi-compat-capabilities.js";
 
+const PI_RUNTIME_PACKAGE_NAMES = new Set([
+  "@earendil-works/pi-coding-agent",
+  "@mariozechner/pi-coding-agent",
+]);
+const PI_RUNTIME_SCOPES = ["@earendil-works", "@mariozechner"];
+const RUNTIME_PACKAGE_BASENAME = "pi-coding-agent";
+const LEGACY_RUNTIME_PACKAGES = new Map([
+  ["@mariozechner/pi-ai", "@earendil-works/pi-ai"],
+  ["@mariozechner/pi-tui", "@earendil-works/pi-tui"],
+]);
+
 let resolvedPiBinPath;
 let resolvedRuntimeDescriptor;
+
+function isSamePath(left, right) {
+  if (!left || !right) {
+    return false;
+  }
+
+  try {
+    return realpathSync(left) === realpathSync(right);
+  } catch {
+    return path.resolve(left) === path.resolve(right);
+  }
+}
+
+function maybeWrapperRealPiPath(candidatePath) {
+  const envRealPi = process.env.PI_VSCODE_SESSION_RESTORE_REAL_PI?.trim();
+  if (envRealPi && existsSync(envRealPi) && !isSamePath(envRealPi, candidatePath)) {
+    return envRealPi;
+  }
+
+  if (!existsSync(candidatePath)) {
+    return undefined;
+  }
+
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "pi-openai-search-wrapper-"));
+  const eventLog = path.join(tempDir, "events.jsonl");
+
+  try {
+    const probe = spawnSync(candidatePath, ["--version"], {
+      encoding: "utf8",
+      timeout: 5000,
+      env: {
+        ...process.env,
+        PI_VSCODE_SESSION_RESTORE_EVENT_LOG: eventLog,
+        PI_VSCODE_SESSION_RESTORE_MARKER: "pi-openai-search-runtime-probe",
+      },
+    });
+
+    if (probe.error || !existsSync(eventLog)) {
+      return undefined;
+    }
+
+    const events = readFileSync(eventLog, "utf8").trim().split(/\n+/).filter(Boolean);
+    for (const line of events) {
+      try {
+        const event = JSON.parse(line);
+        if (event?.event === "pi-wrapper-invocation" && event.realPi && existsSync(event.realPi) && !isSamePath(event.realPi, candidatePath)) {
+          return event.realPi;
+        }
+      } catch {
+        // Игнорируем повреждённые диагностические строки wrapper.
+      }
+    }
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+
+  return undefined;
+}
 
 /**
  * Сброс кеша runtime auto-discovery.
@@ -59,7 +129,10 @@ export function resolvePiBinPath() {
 
   const envBinPath = process.env.PI_BIN_PATH?.trim();
   if (envBinPath) {
-    resolvedPiBinPath = envBinPath;
+    if (!existsSync(envBinPath)) {
+      throw new Error(`pi binary не найден по PI_BIN_PATH: ${envBinPath}`);
+    }
+    resolvedPiBinPath = maybeWrapperRealPiPath(envBinPath) || envBinPath;
     return resolvedPiBinPath;
   }
 
@@ -74,11 +147,65 @@ export function resolvePiBinPath() {
   });
   const discoveredPath = String(lookup.stdout || "").trim();
   if (lookup.status === 0 && discoveredPath && existsSync(discoveredPath)) {
-    resolvedPiBinPath = discoveredPath;
+    resolvedPiBinPath = maybeWrapperRealPiPath(discoveredPath) || discoveredPath;
     return resolvedPiBinPath;
   }
 
   throw new Error("Не удалось определить путь к pi binary. Укажи PI_BIN_PATH или добавь pi в PATH.");
+}
+
+function readPackageJson(root) {
+  const packageJsonPath = path.join(root, "package.json");
+  if (!existsSync(packageJsonPath)) {
+    return undefined;
+  }
+
+  try {
+    return JSON.parse(readFileSync(packageJsonPath, "utf8"));
+  } catch {
+    return undefined;
+  }
+}
+
+function validatePiRuntimeRoot(root) {
+  const packageJson = readPackageJson(root);
+  const packageName = packageJson?.name;
+  if (!PI_RUNTIME_PACKAGE_NAMES.has(packageName)) {
+    throw new Error(`Корень standalone pi runtime не прошёл проверку package name: ${root}`);
+  }
+  return path.resolve(root);
+}
+
+function findPiRuntimeRootByPackageWalk(startPath) {
+  let current = existsSync(startPath) ? realpathSync(startPath) : path.resolve(startPath);
+  if (!current.endsWith(path.sep) && path.basename(current) !== "") {
+    current = path.dirname(current);
+  }
+
+  for (;;) {
+    const packageJson = readPackageJson(current);
+    if (packageJson && PI_RUNTIME_PACKAGE_NAMES.has(packageJson.name)) {
+      return validatePiRuntimeRoot(current);
+    }
+
+    const parent = path.dirname(current);
+    if (parent === current) {
+      return undefined;
+    }
+    current = parent;
+  }
+}
+
+function findPiRuntimeRootByNpmLayout(binPath) {
+  const prefixRoot = path.resolve(path.dirname(binPath), "..", "lib", "node_modules");
+  for (const scope of PI_RUNTIME_SCOPES) {
+    const candidate = path.join(prefixRoot, scope, RUNTIME_PACKAGE_BASENAME);
+    if (!existsSync(candidate)) {
+      continue;
+    }
+    return validatePiRuntimeRoot(candidate);
+  }
+  return undefined;
 }
 
 /**
@@ -88,17 +215,8 @@ export function resolvePiBinPath() {
  * @returns {string | undefined} Версия runtime.
  */
 function readPiRuntimeVersion(root) {
-  const packageJsonPath = path.join(root, "package.json");
-  if (!existsSync(packageJsonPath)) {
-    return undefined;
-  }
-
-  try {
-    const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8"));
-    return typeof packageJson?.version === "string" ? packageJson.version : undefined;
-  } catch {
-    return undefined;
-  }
+  const packageJson = readPackageJson(root);
+  return typeof packageJson?.version === "string" ? packageJson.version : undefined;
 }
 
 /**
@@ -111,18 +229,22 @@ export function resolvePiRuntimeDescriptor() {
     return resolvedRuntimeDescriptor;
   }
 
-  const binPath = resolvePiBinPath();
-  const root = path.resolve(
-    path.dirname(binPath),
-    "..",
-    "lib",
-    "node_modules",
-    "@mariozechner",
-    "pi-coding-agent",
-  );
+  const envRoot = process.env.PI_RUNTIME_ROOT?.trim();
+  if (envRoot) {
+    resolvedRuntimeDescriptor = {
+      kind: "pi",
+      binPath: process.env.PI_BIN_PATH?.trim() || "pi",
+      root: validatePiRuntimeRoot(realpathSync(envRoot)),
+      version: readPiRuntimeVersion(envRoot),
+    };
+    return resolvedRuntimeDescriptor;
+  }
 
-  if (!existsSync(root)) {
-    throw new Error(`Корень standalone pi runtime не найден по вычисленному пути: ${root}`);
+  const binPath = resolvePiBinPath();
+  const root = findPiRuntimeRootByPackageWalk(binPath) || findPiRuntimeRootByNpmLayout(binPath);
+
+  if (!root) {
+    throw new Error(`Корень standalone pi runtime не найден для binary: ${binPath}`);
   }
 
   resolvedRuntimeDescriptor = {
@@ -143,6 +265,59 @@ export function resolvePiRuntimeRoot() {
   return resolvePiRuntimeDescriptor().root;
 }
 
+function legacyPackagePathCandidates(relativePath) {
+  if (relativePath === "node_modules/@mariozechner/pi-ai/dist/index.js") {
+    return [
+      "node_modules/@earendil-works/pi-ai/dist/compat.js",
+      relativePath,
+    ];
+  }
+
+  if (relativePath === "node_modules/@mariozechner/pi-ai/dist/providers/openai-responses-shared.js") {
+    return [
+      "node_modules/@earendil-works/pi-ai/dist/api/openai-responses-shared.js",
+      "node_modules/@earendil-works/pi-ai/dist/providers/openai-responses-shared.js",
+      relativePath,
+    ];
+  }
+
+  for (const [oldPackageName, newPackageName] of LEGACY_RUNTIME_PACKAGES) {
+    const prefix = `node_modules/${oldPackageName}/`;
+    if (relativePath.startsWith(prefix)) {
+      return [
+        `node_modules/${newPackageName}/${relativePath.slice(prefix.length)}`,
+        relativePath,
+      ];
+    }
+  }
+  return [relativePath];
+}
+
+function modulePathCandidates(root, relativePath) {
+  const candidates = [];
+  const addCandidate = (candidate) => {
+    if (!candidates.includes(candidate)) {
+      candidates.push(candidate);
+    }
+  };
+
+  addCandidate(path.join(root, relativePath));
+
+  if (relativePath.startsWith("node_modules/")) {
+    let current = root;
+    for (;;) {
+      addCandidate(path.join(current, relativePath));
+      const parent = path.dirname(current);
+      if (parent === current) {
+        break;
+      }
+      current = parent;
+    }
+  }
+
+  return candidates;
+}
+
 /**
  * Импорт внутреннего модуля standalone pi runtime.
  *
@@ -150,12 +325,16 @@ export function resolvePiRuntimeRoot() {
  * @returns {Promise<any>} Импортированный модуль.
  */
 export async function importPiRuntimeModule(relativePath) {
-  const modulePath = path.join(resolvePiRuntimeRoot(), relativePath);
-  if (!existsSync(modulePath)) {
-    throw new Error(`Модуль standalone pi runtime не найден: ${modulePath}`);
+  const root = resolvePiRuntimeRoot();
+  for (const runtimeRelativePath of legacyPackagePathCandidates(relativePath)) {
+    for (const modulePath of modulePathCandidates(root, runtimeRelativePath)) {
+      if (existsSync(modulePath)) {
+        return import(pathToFileURL(modulePath).href);
+      }
+    }
   }
 
-  return import(pathToFileURL(modulePath).href);
+  throw new Error(`Модуль standalone pi runtime не найден: ${path.join(root, relativePath)}`);
 }
 
 /**

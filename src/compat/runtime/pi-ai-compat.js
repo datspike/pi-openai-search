@@ -17,6 +17,14 @@ const FailingAssistantMessageEventStream = class AssistantMessageEventStream {
   }
 };
 
+export const hasPiAiProviderCompat =
+  typeof piAiModule.AssistantMessageEventStream === "function"
+  && typeof piAiModule.getEnvApiKey === "function";
+
+export function supportsPiAiProviderCompat() {
+  return hasPiAiProviderCompat;
+}
+
 export const AssistantMessageEventStream =
   typeof piAiModule.AssistantMessageEventStream === "function"
     ? piAiModule.AssistantMessageEventStream

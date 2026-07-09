@@ -116,7 +116,7 @@ export function summarizeCompatStatus(features) {
  * @returns {string[]} User-facing warnings.
  */
 export function buildCompatWarnings(features) {
-  return Object.values(features || {})
+  return [...new Set(Object.values(features || {})
     .filter((feature) => feature?.enabled && !feature?.supported)
-    .map((feature) => feature.reason || `${feature.feature} compat unavailable`);
+    .map((feature) => feature.reason || `${feature.feature} compat unavailable`))];
 }
