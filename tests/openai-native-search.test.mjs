@@ -804,10 +804,6 @@ test("interactive search-order patch keeps native web search inline in chronolog
           this.streamingMessage = undefined;
         }
       }
-
-      renderSessionContext() {
-        throw new Error("original renderSessionContext should be patched");
-      }
     }
 
     patchModule.applyInteractiveSearchOrderPatch(
@@ -889,9 +885,7 @@ test("interactive search-order patch keeps native web search inline in chronolog
     });
 
     const replayHost = new MockInteractiveMode();
-    replayHost.renderSessionContext({
-      messages: [completedMessage],
-    });
+    replayHost.addMessageToChat(completedMessage);
 
     assert.equal(replayHost.chatContainer.children.length, 1);
     const replayAssistant = replayHost.chatContainer.children[0];
@@ -1018,10 +1012,6 @@ test("interactive search-order patch formats web search result without runtime h
       }
 
       async handleEvent() {}
-
-      renderSessionContext() {
-        throw new Error("original renderSessionContext should be patched");
-      }
     }
 
     patchModule.applyInteractiveSearchOrderPatch(
@@ -1061,7 +1051,7 @@ test("interactive search-order patch formats web search result without runtime h
       ],
     };
 
-    host.renderSessionContext({ messages: [assistantMessage] });
+    host.addMessageToChat(assistantMessage);
 
     const assistantComponent = host.chatContainer.children[0];
     const toolComponent = assistantComponent.contentContainer.children.find((child) => child.kind === "tool");

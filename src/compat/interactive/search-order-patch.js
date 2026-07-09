@@ -63,11 +63,11 @@ export function assertInteractiveSearchOrderPatchTargets(AssistantMessageCompone
   if (typeof InteractiveMode !== "function") {
     throw new Error("Несовместимый interactive runtime: отсутствует InteractiveMode.");
   }
+  if (typeof InteractiveMode.prototype?.addMessageToChat !== "function") {
+    throw new Error("Несовместимый interactive runtime: отсутствует InteractiveMode.prototype.addMessageToChat().");
+  }
   if (typeof InteractiveMode.prototype?.handleEvent !== "function") {
     throw new Error("Несовместимый interactive runtime: отсутствует InteractiveMode.prototype.handleEvent().");
-  }
-  if (typeof InteractiveMode.prototype?.renderSessionContext !== "function") {
-    throw new Error("Несовместимый interactive runtime: отсутствует InteractiveMode.prototype.renderSessionContext().");
   }
 }
 
@@ -295,74 +295,6 @@ function updateAssistantContentWithInlineSearch(component, message, runtime) {
 }
 
 /**
- * Патч replay/history renderer с сохранением обычных tool calls и inline native search.
- *
- * @param {any} host Interactive mode host.
- * @param {any} sessionContext Session context.
- * @param {object} options Render options.
- * @returns {void}
- */
-function renderSessionContextWithInlineSearch(host, sessionContext, options = {}, ToolExecutionComponent) {
-  host.pendingTools.clear();
-  if (options.updateFooter) {
-    host.footer.invalidate();
-    host.updateEditorBorderColor();
-  }
-
-  for (const message of sessionContext.messages) {
-    if (message.role === "assistant") {
-      host.addMessageToChat(message);
-
-      for (const content of message.content) {
-        if (content.type === "toolCall") {
-          const component = new ToolExecutionComponent(
-            content.name,
-            content.id,
-            content.arguments,
-            { showImages: host.settingsManager.getShowImages() },
-            host.getRegisteredToolDefinition(content.name),
-            host.ui,
-            host.sessionManager.getCwd(),
-          );
-          component.setExpanded(host.toolOutputExpanded);
-          host.chatContainer.addChild(component);
-          if (message.stopReason === "aborted" || message.stopReason === "error") {
-            let errorMessage;
-            if (message.stopReason === "aborted") {
-              const retryAttempt = host.session.retryAttempt;
-              errorMessage =
-                retryAttempt > 0
-                  ? `Aborted after ${retryAttempt} retry attempt${retryAttempt > 1 ? "s" : ""}`
-                  : "Operation aborted";
-            } else {
-              errorMessage = message.errorMessage || "Error";
-            }
-            component.updateResult({ content: [{ type: "text", text: errorMessage }], isError: true });
-          } else {
-            host.pendingTools.set(content.id, component);
-          }
-        }
-      }
-      continue;
-    }
-
-    if (message.role === "toolResult") {
-      const component = host.pendingTools.get(message.toolCallId);
-      if (component) {
-        component.updateResult(message);
-        host.pendingTools.delete(message.toolCallId);
-      }
-      continue;
-    }
-
-    host.addMessageToChat(message, options);
-  }
-
-  host.pendingTools.clear();
-  host.ui.requestRender();
-}
-
-/**
  * Применение inline search-order patch к interactive runtime.
  *
  * @param {any} AssistantMessageComponent Компонент assistant message.
@@ -433,7 +365,10 @@ export function applyInteractiveSearchOrderPatch(
               content.name,
               content.id,
               content.arguments,
-              { showImages: this.settingsManager.getShowImages() },
+              {
+                showImages: this.settingsManager.getShowImages(),
+                imageWidthCells: this.settingsManager.getImageWidthCells(),
+              },
               this.getRegisteredToolDefinition(content.name),
               this.ui,
               this.sessionManager.getCwd(),
@@ -459,10 +394,6 @@ export function applyInteractiveSearchOrderPatch(
     }
 
     return result;
-  };
-
-  InteractiveMode.prototype.renderSessionContext = function patchedRenderSessionContext(sessionContext, options = {}) {
-    return renderSessionContextWithInlineSearch(this, sessionContext, options, ToolExecutionComponent);
   };
 
   AssistantMessageComponent.prototype[INLINE_SEARCH_PATCH_MARKER] = true;
