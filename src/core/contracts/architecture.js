@@ -1,7 +1,9 @@
 export const SUPPORTED_RUNTIME = Object.freeze({
   product: "standalone-pi",
-  provider: "openai",
-  api: "openai-responses",
+  models: Object.freeze([
+    Object.freeze({ provider: "openai", api: "openai-responses" }),
+    Object.freeze({ provider: "openai-codex", api: "openai-codex-responses" }),
+  ]),
   testedBaselineVersion: "0.65.0",
 });
 
@@ -17,6 +19,8 @@ export const COMPAT_CAPABILITIES = Object.freeze({
     "tool-render",
   ]),
   policy: Object.freeze({
+    defaultEnabled: true,
+    optOut: "per-feature-env-false",
     unknownVersion: "allowed-if-probe-passes",
     degradation: "feature-level-fail-open",
   }),

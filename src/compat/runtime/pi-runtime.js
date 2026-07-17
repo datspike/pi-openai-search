@@ -345,25 +345,29 @@ export async function importPiRuntimeModule(relativePath) {
  * @returns {Promise<{runtime: any, features: Record<string, any>, warnings: string[], diagnostics: string[], status: string}>} Compat summary.
  */
 export async function probePiCompatCapabilities(pi, probes = {}) {
+  const providerEnabled = parseCompatBoolean(process.env.PI_OPENAI_NATIVE_SEARCH_PROVIDER_COMPAT, true);
+  const inlineEnabled = parseCompatBoolean(process.env.PI_OPENAI_NATIVE_SEARCH_INTERACTIVE_COMPAT, true);
+  const toolRenderEnabled = parseCompatBoolean(process.env.PI_OPENAI_NATIVE_SEARCH_TOOL_RENDER_COMPAT, true);
   let descriptor;
 
   try {
     descriptor = resolvePiRuntimeDescriptor();
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
+    const unavailable = (feature) => createCompatFeatureStatus(feature, {
+      supported: false,
+      reason,
+    });
     const features = {
-      [COMPAT_FEATURES.providerCompat]: createCompatFeatureStatus(COMPAT_FEATURES.providerCompat, {
-        supported: false,
-        reason,
-      }),
-      [COMPAT_FEATURES.interactiveInline]: createCompatFeatureStatus(COMPAT_FEATURES.interactiveInline, {
-        supported: false,
-        reason,
-      }),
-      [COMPAT_FEATURES.toolRender]: createCompatFeatureStatus(COMPAT_FEATURES.toolRender, {
-        supported: false,
-        reason,
-      }),
+      [COMPAT_FEATURES.providerCompat]: providerEnabled
+        ? unavailable(COMPAT_FEATURES.providerCompat)
+        : createDisabledCompatFeatureStatus(COMPAT_FEATURES.providerCompat),
+      [COMPAT_FEATURES.interactiveInline]: inlineEnabled
+        ? unavailable(COMPAT_FEATURES.interactiveInline)
+        : createDisabledCompatFeatureStatus(COMPAT_FEATURES.interactiveInline),
+      [COMPAT_FEATURES.toolRender]: toolRenderEnabled
+        ? unavailable(COMPAT_FEATURES.toolRender)
+        : createDisabledCompatFeatureStatus(COMPAT_FEATURES.toolRender),
     };
 
     return {
@@ -382,9 +386,6 @@ export async function probePiCompatCapabilities(pi, probes = {}) {
   const version = classifyPiVersion(descriptor.version);
   const diagnostics = [...version.diagnostics];
 
-  const providerEnabled = parseCompatBoolean(process.env.PI_OPENAI_NATIVE_SEARCH_PROVIDER_COMPAT, true);
-  const inlineEnabled = parseCompatBoolean(process.env.PI_OPENAI_NATIVE_SEARCH_INTERACTIVE_COMPAT, true);
-  const toolRenderEnabled = parseCompatBoolean(process.env.PI_OPENAI_NATIVE_SEARCH_TOOL_RENDER_COMPAT, true);
 
   const featureEntries = await Promise.all([
     providerEnabled

@@ -10,11 +10,13 @@
 
 ## Feature expectations
 
-| Feature | Env flag | Expected probe |
-|---|---|---|
-| `provider-compat` | `PI_OPENAI_NATIVE_SEARCH_PROVIDER_COMPAT` | доступен `pi.registerProvider()` или private `registerApiProvider()` |
-| `interactive-inline` | `PI_OPENAI_NATIVE_SEARCH_INTERACTIVE_COMPAT` | совместимы patch targets `AssistantMessageComponent`, `ToolExecutionComponent`, `InteractiveMode` |
-| `tool-render` | `PI_OPENAI_NATIVE_SEARCH_TOOL_RENDER_COMPAT` | совместим `ToolExecutionComponent.prototype.formatToolExecution()` |
+Все compat-возможности включены, если соответствующая env-переменная отсутствует. Значение `false` — явный opt-out отдельной возможности.
+
+| Feature | Env flag | Default | Expected probe |
+|---|---|---|---|
+| `provider-compat` | `PI_OPENAI_NATIVE_SEARCH_PROVIDER_COMPAT` | on | доступен `pi.registerProvider()` или private `registerApiProvider()` |
+| `interactive-inline` | `PI_OPENAI_NATIVE_SEARCH_INTERACTIVE_COMPAT` | on | совместимы patch targets `AssistantMessageComponent`, `ToolExecutionComponent`, `InteractiveMode` |
+| `tool-render` | `PI_OPENAI_NATIVE_SEARCH_TOOL_RENDER_COMPAT` | on | совместим `ToolExecutionComponent.prototype.formatToolExecution()` |
 
 ## Degradation policy
 

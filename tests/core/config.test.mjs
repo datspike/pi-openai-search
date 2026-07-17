@@ -49,10 +49,14 @@ test("loadNativeSearchConfig reads stable env overrides", () => {
   });
 });
 
-test("isOpenAIResponsesModel detects supported transports", () => {
-  assert.equal(isOpenAIResponsesModel({ api: "openai-responses" }), true);
-  assert.equal(isOpenAIResponsesModel({ api: "openai-codex-responses" }), true);
-  assert.equal(isOpenAIResponsesModel({ api: "azure-openai-responses" }), true);
-  assert.equal(isOpenAIResponsesModel({ api: "openai-completions" }), false);
+test("isOpenAIResponsesModel accepts only OpenAI and OpenAI Codex transports", () => {
+  assert.equal(isOpenAIResponsesModel({ provider: "openai", api: "openai-responses" }), true);
+  assert.equal(
+    isOpenAIResponsesModel({ provider: "openai-codex", api: "openai-codex-responses" }),
+    true,
+  );
+  assert.equal(isOpenAIResponsesModel({ provider: "azure", api: "azure-openai-responses" }), false);
+  assert.equal(isOpenAIResponsesModel({ provider: "custom", api: "openai-responses" }), false);
+  assert.equal(isOpenAIResponsesModel({ api: "openai-responses" }), false);
   assert.equal(isOpenAIResponsesModel(undefined), false);
 });

@@ -1,7 +1,7 @@
 # Repo guidance
 
 ## Что это за репозиторий
-- `pi-openai-search` — extension только для standalone `pi`, который подключает нативный `web_search` у OpenAI Responses API.
+- `pi-openai-search` — extension только для standalone `pi`, который подключает нативный `web_search` для OpenAI Responses и OpenAI Codex Responses.
 - Главный инвариант: truthful UX. Показываем только реальные provider events и реальные structured sources, без synthetic fallback.
 
 ## Как ориентироваться
@@ -9,7 +9,7 @@
 - `PLANCC-CONTEXT.md` и `NEXT-STAGE-SCOPE.md`, если присутствуют, считай временными planning-заметками. Используй их только когда задача явно на них ссылается; не опирайся на них как на постоянный контракт репозитория.
 
 ## Scope и ограничения
-- Базовый supported path для этого репозитория: `provider=openai`, `api=openai-responses`, standalone `pi`.
+- Базовые supported paths: `provider=openai` + `api=openai-responses` и `provider=openai-codex` + `api=openai-codex-responses`, standalone `pi`.
 - Не расширяй scope на upstream `pi`, другие transports и productized fallback-моды без прямого запроса.
 - Не добавляй synthetic citations, synthetic query labels, prompt/text-derived search artifacts или мусорные URL.
 - Если runtime path несовместим или ломается, деградация должна быть fail-open и с понятным user-facing warning.

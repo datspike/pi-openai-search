@@ -5,7 +5,7 @@ import {
   buildWebSearchTool,
   ensureNativeSearchIncludes,
   injectNativeWebSearch,
-  looksLikeOpenAIResponsesPayload,
+  isDirectSearchToolDuplicate,
 } from "../../src/core/payload/native-search.js";
 
 test("buildWebSearchTool builds OpenAI tool shape", () => {
@@ -51,13 +51,17 @@ test("ensureNativeSearchIncludes preserves existing include fields and dedupes d
   ]);
 });
 
-test("injectNativeWebSearch injects tool and removes custom search tools", () => {
+test("injectNativeWebSearch removes only exact direct search duplicates", () => {
   const payload = {
     model: "gpt-5.4",
     tools: [
       { type: "function", name: "read" },
       { type: "function", name: "search-the-web" },
       { type: "function", name: "google_search" },
+      { type: "function", name: "bx" },
+      { type: "function", name: "mcp" },
+      { type: "function", name: "brave_web_search" },
+      { type: "hosted", name: "search-the-web" },
     ],
   };
 
@@ -78,6 +82,10 @@ test("injectNativeWebSearch injects tool and removes custom search tools", () =>
   assert.deepEqual(result.include, ["web_search_call.action.sources"]);
   assert.deepEqual(result.tools, [
     { type: "function", name: "read" },
+    { type: "function", name: "bx" },
+    { type: "function", name: "mcp" },
+    { type: "function", name: "brave_web_search" },
+    { type: "hosted", name: "search-the-web" },
     {
       type: "web_search",
       external_web_access: true,
@@ -87,6 +95,13 @@ test("injectNativeWebSearch injects tool and removes custom search tools", () =>
       },
     },
   ]);
+});
+
+test("isDirectSearchToolDuplicate accepts only exact function-tool names", () => {
+  assert.equal(isDirectSearchToolDuplicate({ type: "function", name: "search_and_read" }), true);
+  assert.equal(isDirectSearchToolDuplicate({ type: "function", name: "bx" }), false);
+  assert.equal(isDirectSearchToolDuplicate({ type: "function", name: "brave_web_search" }), false);
+  assert.equal(isDirectSearchToolDuplicate({ type: "hosted", name: "search-the-web" }), false);
 });
 
 test("injectNativeWebSearch leaves non-openai-responses payload untouched", () => {
@@ -106,9 +121,28 @@ test("injectNativeWebSearch leaves non-openai-responses payload untouched", () =
   assert.deepEqual(result.tools, [{ type: "function", name: "search-the-web" }]);
 });
 
-test("looksLikeOpenAIResponsesPayload detects responses-shaped payload without model", () => {
-  assert.equal(looksLikeOpenAIResponsesPayload({ input: [] }), true);
-  assert.equal(looksLikeOpenAIResponsesPayload({ max_output_tokens: 1000 }), true);
-  assert.equal(looksLikeOpenAIResponsesPayload({ include: ["reasoning.encrypted_content"] }), true);
-  assert.equal(looksLikeOpenAIResponsesPayload({ messages: [] }), false);
+test("injectNativeWebSearch leaves responses-shaped payload without model metadata untouched", () => {
+  const payload = {
+    input: [],
+    tools: [{ type: "function", name: "search-the-web" }],
+  };
+
+  const result = injectNativeWebSearch(payload, undefined, { enabled: true, mode: "live" });
+
+  assert.deepEqual(result, payload);
+  assert.deepEqual(result.tools, [{ type: "function", name: "search-the-web" }]);
+});
+
+test("injectNativeWebSearch supports OpenAI Codex", () => {
+  const payload = { tools: [{ type: "function", name: "read" }] };
+  const result = injectNativeWebSearch(
+    payload,
+    { provider: "openai-codex", api: "openai-codex-responses" },
+    { enabled: true, mode: "cached" },
+  );
+
+  assert.deepEqual(result.tools, [
+    { type: "function", name: "read" },
+    { type: "web_search", external_web_access: false },
+  ]);
 });

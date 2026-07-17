@@ -23,6 +23,9 @@ function withRuntimeEnv(values, fn) {
     "PI_BIN_PATH",
     "PI_RUNTIME_ROOT",
     "PI_VSCODE_SESSION_RESTORE_REAL_PI",
+    "PI_OPENAI_NATIVE_SEARCH_PROVIDER_COMPAT",
+    "PI_OPENAI_NATIVE_SEARCH_INTERACTIVE_COMPAT",
+    "PI_OPENAI_NATIVE_SEARCH_TOOL_RENDER_COMPAT",
   ];
   resetPiRuntimeCache();
 
@@ -364,5 +367,23 @@ test("probePiCompatCapabilities degrades fail-open on runtime resolution mismatc
     assert.equal(summary.status, "unavailable");
     assert.equal(summary.warnings.length, 1);
     assert.match(summary.diagnostics[0], /Не удалось определить путь к pi binary|не найден/i);
+  });
+});
+
+test("probePiCompatCapabilities preserves explicit opt-out when runtime resolution fails", async () => {
+  await withRuntimeEnv({
+    PI_BIN_PATH: "/definitely/missing/pi",
+    PI_OPENAI_NATIVE_SEARCH_PROVIDER_COMPAT: "false",
+    PI_OPENAI_NATIVE_SEARCH_INTERACTIVE_COMPAT: "false",
+    PI_OPENAI_NATIVE_SEARCH_TOOL_RENDER_COMPAT: "false",
+  }, async () => {
+    const summary = await probePiCompatCapabilities({});
+
+    assert.equal(summary.status, "unavailable");
+    assert.deepEqual(summary.warnings, []);
+    for (const feature of Object.values(summary.features)) {
+      assert.equal(feature.enabled, false);
+      assert.match(feature.reason, /disabled by env/);
+    }
   });
 });

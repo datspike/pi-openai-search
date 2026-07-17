@@ -13,7 +13,6 @@ import {
   buildWebSearchTool,
   ensureNativeSearchIncludes,
   injectNativeWebSearch,
-  looksLikeOpenAIResponsesPayload,
 } from "../src/core/payload/native-search.js";
 import {
   appendStructuredCitations,
@@ -256,11 +255,14 @@ async function loadTestableInteractiveSearchOrderPatchModule(tempDir) {
   return import(pathToFileURL(transformedModulePath).href);
 }
 
-test("isOpenAIResponsesModel detects supported transports", () => {
-  assert.equal(isOpenAIResponsesModel({ api: "openai-responses" }), true);
-  assert.equal(isOpenAIResponsesModel({ api: "openai-codex-responses" }), true);
-  assert.equal(isOpenAIResponsesModel({ api: "azure-openai-responses" }), true);
-  assert.equal(isOpenAIResponsesModel({ api: "openai-completions" }), false);
+test("isOpenAIResponsesModel accepts only OpenAI and OpenAI Codex transports", () => {
+  assert.equal(isOpenAIResponsesModel({ provider: "openai", api: "openai-responses" }), true);
+  assert.equal(
+    isOpenAIResponsesModel({ provider: "openai-codex", api: "openai-codex-responses" }),
+    true,
+  );
+  assert.equal(isOpenAIResponsesModel({ provider: "azure", api: "azure-openai-responses" }), false);
+  assert.equal(isOpenAIResponsesModel({ provider: "custom", api: "openai-responses" }), false);
   assert.equal(isOpenAIResponsesModel(undefined), false);
 });
 
@@ -413,42 +415,21 @@ test("injectNativeWebSearch does not duplicate existing native tool", () => {
   ]);
 });
 
-test("looksLikeOpenAIResponsesPayload detects responses-shaped payload without model", () => {
-  assert.equal(looksLikeOpenAIResponsesPayload({ input: [] }), true);
-  assert.equal(looksLikeOpenAIResponsesPayload({ max_output_tokens: 1000 }), true);
-  assert.equal(looksLikeOpenAIResponsesPayload({ include: ["reasoning.encrypted_content"] }), true);
-  assert.equal(looksLikeOpenAIResponsesPayload({ messages: [] }), false);
-});
+test("injectNativeWebSearch leaves responses-shaped payload without model metadata untouched", () => {
+  const payload = {
+    input: [{ role: "user", content: [{ type: "input_text", text: "hello" }] }],
+    tools: [{ type: "function", name: "search-the-web" }],
+    include: ["reasoning.encrypted_content"],
+  };
 
-test("injectNativeWebSearch can infer openai responses from payload shape when model is absent", () => {
-  const result = injectNativeWebSearch(
-    {
-      input: [{ role: "user", content: [{ type: "input_text", text: "hello" }] }],
-      tools: [{ type: "function", name: "read" }],
-      include: ["reasoning.encrypted_content"],
-    },
-    undefined,
-    {
-      enabled: true,
-      mode: "live",
-      contextSize: "medium",
-    },
-  );
+  const result = injectNativeWebSearch(payload, undefined, {
+    enabled: true,
+    mode: "live",
+    contextSize: "medium",
+  });
 
-  assert.equal(result.tool_choice, "auto");
-  assert.equal(result.parallel_tool_calls, true);
-  assert.deepEqual(result.include, [
-    "reasoning.encrypted_content",
-    "web_search_call.action.sources",
-  ]);
-  assert.deepEqual(result.tools, [
-    { type: "function", name: "read" },
-    {
-      type: "web_search",
-      external_web_access: true,
-      search_context_size: "medium",
-    },
-  ]);
+  assert.deepEqual(result, payload);
+  assert.deepEqual(result.tools, [{ type: "function", name: "search-the-web" }]);
 });
 
 test("appendStructuredCitations appends only missing URLs", () => {
@@ -1577,7 +1558,7 @@ test("extension updates TUI status for native web search lifecycle", async () =>
   }
 });
 
-test("extension reuses last selected model when before_provider_request omits model", async () => {
+test("extension does not reuse selected model when provider request omits metadata", async () => {
   const tempDir = fs.mkdtempSync(path.join(process.cwd(), ".tmp-pi-openai-search-model-fallback-test-"));
 
   try {
@@ -1614,9 +1595,9 @@ test("extension reuses last selected model when before_provider_request omits mo
       payload: { tools: [] },
     });
 
-    assert.equal(nextPayload.seenModelApi, "openai-responses");
-    assert.equal(nextPayload.seenProvider, "openai");
-    assert.equal(nextPayload.seenModelId, "gpt-5.4-mini");
+    assert.equal(nextPayload.seenModelApi, undefined);
+    assert.equal(nextPayload.seenProvider, undefined);
+    assert.equal(nextPayload.seenModelId, undefined);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }

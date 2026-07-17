@@ -1,23 +1,26 @@
 # pi-openai-search
 
-Extension для standalone `pi`, который включает native OpenAI `web_search` в supported path `provider=openai` + `api=openai-responses` и поверх этого пытается включить compat-enhanced Codex-like UX без synthetic fallback.
+Extension для standalone `pi`, который включает native OpenAI `web_search` только для явных маршрутов OpenAI Responses и OpenAI Codex Responses. Поверх core включён default-on compat-enhanced интерфейс без synthetic fallback.
 
 ## Support contract
 
 Stable contract:
 
-- standalone `pi`
-- `provider=openai`
-- `api=openai-responses`
-- truthful payload/source policy через `src/core/**`
+- автономный `pi`
+- `provider=openai` + `api=openai-responses`
+- `provider=openai-codex` + `api=openai-codex-responses`
+- Azure, произвольные OpenAI-compatible поставщики и данные без метаданных модели не изменяются
+- достоверная политика payload/source через `src/core/**`
 
 Compat-enhanced contract:
 
-- capability-based probes для `provider-compat`, `interactive-inline`, `tool-render`
-- tested baseline runtime: `pi 0.65.0`
-- unknown `pi` version не блокирует запуск, если capability probe проходит
-- unknown version уходит только в diagnostics, не в user-facing warnings
-- деградация только feature-level, без synthetic search artifacts
+- `provider-compat`, `interactive-inline` и `tool-render` включены по умолчанию
+- каждый флаг совместимости поддерживает явный режим opt-out со значением `false`
+- capability-based проверок внутренних стыков среды выполнения
+- проверенная базовая среда выполнения: `pi 0.65.0`
+- неизвестная версия `pi` не блокирует запуск, если проверка возможностей проходит
+- неизвестная версия попадает только в диагностические сообщения, но не в предупреждения для пользователя
+- деградация только feature-level, без искусственных артефактов поиска
 
 Матрица и caveats: [docs/compatibility.md](./docs/compatibility.md)
 
@@ -44,8 +47,9 @@ Compat-enhanced contract:
 
 ## Что делает core
 
-- включает native OpenAI `web_search` только для Responses API
-- удаляет конкурирующие search tools из model-visible payload
+- включает native OpenAI `web_search` только для двух поддерживаемых provider/API пар
+- удаляет только точные прямые function-tool дубликаты: `search-the-web`, `search_and_read`, `google_search`
+- не скрывает `bx`, Brave/MCP gateway и прочие инструменты по словам `search`, `brave`, `bx` или `mcp`
 - добавляет `include: ["web_search_call.action.sources"]`
 - выставляет `tool_choice = "auto"` и `parallel_tool_calls = true`, если поле не задано
 - обновляет factual search status только по реально наблюдаемым search events
@@ -90,7 +94,7 @@ Stable env:
 - `PI_OPENAI_NATIVE_SEARCH_DEBUG_FILE=/tmp/pi-openai-search.json`
 - `PI_OPENAI_NATIVE_SEARCH_DEBUG_MESSAGE_FILE=/tmp/pi-openai-search-message.json`
 
-Compat env:
+Compat env (все включены по умолчанию; `false` отключает отдельную возможность):
 
 - `PI_OPENAI_NATIVE_SEARCH_PROVIDER_COMPAT=true|false`
 - `PI_OPENAI_NATIVE_SEARCH_INTERACTIVE_COMPAT=true|false`

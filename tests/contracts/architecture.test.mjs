@@ -16,18 +16,22 @@ const repoRoot = path.resolve(fixtureDir, "../..");
 test("architecture contract keeps supported runtime narrow", () => {
   assert.deepEqual(CANONICAL_CONTRACT_MAP.supportedRuntime, {
     product: "standalone-pi",
-    provider: "openai",
-    api: "openai-responses",
+    models: [
+      { provider: "openai", api: "openai-responses" },
+      { provider: "openai-codex", api: "openai-codex-responses" },
+    ],
     testedBaselineVersion: "0.65.0",
   });
 });
 
-test("compat contract exposes feature registry and capability-first policy", () => {
+test("compat contract exposes default-enabled capability-first policy", () => {
   assert.deepEqual(CANONICAL_CONTRACT_MAP.compatCapabilities.features, [
     "provider-compat",
     "interactive-inline",
     "tool-render",
   ]);
+  assert.equal(CANONICAL_CONTRACT_MAP.compatCapabilities.policy.defaultEnabled, true);
+  assert.equal(CANONICAL_CONTRACT_MAP.compatCapabilities.policy.optOut, "per-feature-env-false");
   assert.equal(CANONICAL_CONTRACT_MAP.compatCapabilities.policy.unknownVersion, "allowed-if-probe-passes");
 });
 

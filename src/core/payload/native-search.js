@@ -13,29 +13,15 @@ export const OPENAI_NATIVE_SEARCH_INCLUDE_FIELDS = new Set([
 ]);
 
 /**
- * Эвристика для распознавания payload OpenAI Responses без model metadata.
+ * Проверка точного прямого дубликата native web search.
  *
- * @param {Record<string, any> | undefined} payload Provider payload.
- * @returns {boolean} true, если payload похож на Responses API.
+ * @param {unknown} tool Один model-visible tool из provider payload.
+ * @returns {boolean} true только для известных function tools.
  */
-export function looksLikeOpenAIResponsesPayload(payload) {
-  if (!payload || typeof payload !== "object") {
-    return false;
-  }
-
-  if (Array.isArray(payload.input)) {
-    return true;
-  }
-
-  if ("max_output_tokens" in payload) {
-    return true;
-  }
-
-  if (Array.isArray(payload.include) && payload.include.some((field) => typeof field === "string")) {
-    return true;
-  }
-
-  return false;
+export function isDirectSearchToolDuplicate(tool) {
+  return tool?.type === "function"
+    && typeof tool.name === "string"
+    && CUSTOM_SEARCH_TOOL_NAMES.has(tool.name);
 }
 
 /**
@@ -137,18 +123,13 @@ export function injectNativeWebSearch(payload, model, config) {
     return payload;
   }
 
-  if (!isOpenAIResponsesModel(model) && !looksLikeOpenAIResponsesPayload(payload)) {
+  if (!isOpenAIResponsesModel(model)) {
     return payload;
   }
 
   const tools = Array.isArray(payload.tools) ? [...payload.tools] : [];
   const hasNativeWebSearch = tools.some((tool) => tool?.type === "web_search");
-  const filteredTools = tools.filter((tool) => {
-    if (tool?.name && CUSTOM_SEARCH_TOOL_NAMES.has(tool.name)) {
-      return false;
-    }
-    return true;
-  });
+  const filteredTools = tools.filter((tool) => !isDirectSearchToolDuplicate(tool));
 
   const webSearchTool = buildWebSearchTool(config);
   if (!webSearchTool) {

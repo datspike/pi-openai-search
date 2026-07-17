@@ -1,7 +1,6 @@
-export const OPENAI_NATIVE_SEARCH_APIS = new Set([
-  "openai-responses",
-  "openai-codex-responses",
-  "azure-openai-responses",
+export const OPENAI_NATIVE_SEARCH_MODELS = Object.freeze([
+  Object.freeze({ provider: "openai", api: "openai-responses" }),
+  Object.freeze({ provider: "openai-codex", api: "openai-codex-responses" }),
 ]);
 
 /**
@@ -103,15 +102,17 @@ export function loadNativeSearchConfig(env = process.env) {
 }
 
 /**
- * Проверка, что модель идёт через OpenAI Responses transport.
+ * Проверка поддерживаемого native search маршрута OpenAI.
  *
  * @param {{api?: string, provider?: string} | undefined} model Модель из provider hook.
- * @returns {boolean} true, если нужно включить native search.
+ * @returns {boolean} true для OpenAI Responses и OpenAI Codex Responses.
  */
 export function isOpenAIResponsesModel(model) {
   if (!model) {
     return false;
   }
 
-  return OPENAI_NATIVE_SEARCH_APIS.has(String(model.api || ""));
+  return OPENAI_NATIVE_SEARCH_MODELS.some(
+    (candidate) => candidate.provider === model.provider && candidate.api === model.api,
+  );
 }

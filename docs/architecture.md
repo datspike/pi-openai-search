@@ -2,14 +2,15 @@
 
 ## Supported runtime
 
-Поддерживаемый scope намеренно узкий:
+Поддерживаемая область действия намеренно узкая:
 
-- standalone `pi`
-- `provider=openai`
-- `api=openai-responses`
-- tested baseline runtime: `pi 0.65.0`
+- автономный `pi`
+- `provider=openai` + `api=openai-responses`
+- `provider=openai-codex` + `api=openai-codex-responses`
+- Azure, произвольные OpenAI-compatible поставщики и данные без метаданных модели не изменяются
+- проверенная базовая среда выполнения: `pi 0.65.0`
 
-Unknown `pi` version не считается hard blocker'ом сама по себе. Разрешение идёт capability-first: если probe проходит, compat path остаётся допустимым.
+Unknown `pi` version не считается hard blocker'ом сама по себе. Разрешение compat идёт capability-first: если probe проходит, compat path остаётся допустимым. Все три compat-возможности включены по умолчанию и отключаются только явным `false` в соответствующей env-переменной.
 
 ## Слои
 
@@ -24,12 +25,14 @@ Unknown `pi` version не считается hard blocker'ом сама по с�
 
 Ответственность core:
 
-- stable env и payload mutation
-- truthful source policy
-- lifecycle status для factual search
-- safe degradation без знания private runtime internals
+- стабильное окружение и изменение данных запроса только для двух явных provider/API пар
+- удаление только точных прямых function-tool дубликатов `search-the-web`, `search_and_read`, `google_search`
+- сохранение `bx`, Brave/MCP шлюза и любых неизвестных инструментов без эвристики по имени
+- политика достоверности источников
+- статус жизненного цикла для поиска фактов
+- безопасное ограничение функциональности без знания внутреннего устройства закрытой среды выполнения
 
-`core` не импортирует `src/compat/**` и private runtime модули.
+`core` не импортирует `src/compat/**` и закрытые модули среды выполнения.
 
 ### `src/compat/**`
 
