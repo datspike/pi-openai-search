@@ -4,9 +4,16 @@ import {
 } from "../runtime/pi-compat-capabilities.js";
 import * as piAiCompat from "../runtime/pi-ai-compat.js";
 import { loadOpenAIResponsesInternals } from "./openai-responses-client.js";
-import { streamPatchedOpenAIResponses, streamSimplePatchedOpenAIResponses } from "./openai-responses-stream.js";
+import {
+  setProviderCompatReadiness,
+  streamPatchedOpenAIResponses,
+  streamSimplePatchedOpenAIResponses,
+} from "./openai-responses-stream.js";
+
+export { setProviderCompatReadiness };
 
 let providerRegistered = false;
+const publicProviderRuntimes = new WeakSet();
 
 function validateOpenAIResponsesInternals(internals) {
   return typeof internals?.convertResponsesMessages === "function"
@@ -159,13 +166,15 @@ export async function activateProviderCompat(pi, capabilitySummary, options = {}
     return false;
   }
 
-  // session/runtime patching нужен даже когда публичный provider override доступен
-  const privatePatchRegistered = registerOpenAIResponsesDisplayPatch(compat);
-
+  // `registerProvider` is the documented backend path. Private registration is
+  // a capability-gated fallback only; it must never be required for a request.
   if (typeof pi?.registerProvider === "function") {
-    pi.registerProvider("openai", buildPatchedOpenAIResponsesProviderConfig());
+    if (!publicProviderRuntimes.has(pi)) {
+      pi.registerProvider("openai", buildPatchedOpenAIResponsesProviderConfig());
+      publicProviderRuntimes.add(pi);
+    }
     return true;
   }
 
-  return privatePatchRegistered;
+  return registerOpenAIResponsesDisplayPatch(compat);
 }

@@ -119,12 +119,13 @@ async function loadTestableExtensionModule(
         '  return { feature: "provider-compat", enabled: true, status: "supported", supported: true, diagnostics: [] };',
         '}',
         'export async function activateProviderCompat(pi) {',
-        '  registerOpenAIResponsesDisplayPatch();',
         '  if (typeof pi?.registerProvider === "function") {',
         '    pi.registerProvider("openai", buildPatchedOpenAIResponsesProviderConfig());',
+        '    return true;',
         '  }',
-        '  return true;',
+        '  return registerOpenAIResponsesDisplayPatch();',
         '}',
+        'export function setProviderCompatReadiness() {}',
         'export function registerOpenAIResponsesDisplayPatch() {',
         '  globalThis.__providerCompatFallbackCalls = (globalThis.__providerCompatFallbackCalls || 0) + 1;',
         '}',
@@ -222,6 +223,7 @@ async function loadTestableProviderModule(tempDir) {
   fs.writeFileSync(
     mockStreamPath,
     [
+      'export function setProviderCompatReadiness() {}',
       'export function streamPatchedOpenAIResponses() {}',
       'export function streamSimplePatchedOpenAIResponses() {}',
     ].join("\n"),
@@ -318,7 +320,7 @@ test("buildWebSearchTool builds OpenAI tool shape", () => {
   );
 });
 
-test("injectNativeWebSearch injects tool and removes custom search tools", () => {
+test("injectNativeWebSearch injects tool and removes exact direct search duplicates", () => {
   const payload = {
     model: "gpt-5.4",
     tools: [
@@ -1340,7 +1342,7 @@ test("extension bootstrap keeps core hooks and enables provider compat overlay b
     assert.equal(providerRegistrations[0].config.marker, "experimental-provider-compat");
     assert.equal(typeof providerRegistrations[0].config.stream, "function");
     assert.equal(typeof providerRegistrations[0].config.streamSimple, "function");
-    assert.equal(globalThis.__providerCompatFallbackCalls, 1);
+    assert.equal(globalThis.__providerCompatFallbackCalls, undefined);
     assert.equal(typeof handlers.get("model_select"), "function");
     assert.equal(typeof handlers.get("before_provider_request"), "function");
     assert.equal(typeof handlers.get("message_update"), "function");
@@ -1398,6 +1400,7 @@ test("extension starts provider and ui compat eagerly on bootstrap", async () =>
         "  pi.registerProvider('openai', buildPatchedOpenAIResponsesProviderConfig());",
         "  return true;",
         "}",
+        "export function setProviderCompatReadiness() {}",
         "export function registerOpenAIResponsesDisplayPatch() {}",
       ],
     });
@@ -1955,7 +1958,7 @@ test("buildPatchedParams preserves existing include fields and does not inject h
   }
 });
 
-test("enrichOutputFromCompletedResponse keeps per-call truthfulness and backfills terminal search only", async () => {
+test("enrichOutputFromCompletedResponse keeps per-call truthfulness and backfills observed search calls only", async () => {
   const tempDir = fs.mkdtempSync(path.join(process.cwd(), ".tmp-pi-openai-search-enrich-test-"));
 
   try {
@@ -2085,23 +2088,18 @@ test("enrichOutputFromCompletedResponse keeps per-call truthfulness and backfill
     assert.deepEqual(resultByToolUseId.get("search_2"), [
       {
         type: "web_search_result",
-        title: "First result source",
-        url: "https://example.com/first",
-      },
-      {
-        type: "web_search_result",
         title: "Second source",
         url: "https://example.com/second",
       },
       {
         type: "web_search_result",
-        title: "Third result source",
-        url: "https://example.com/third",
+        title: "First source duplicate",
+        url: "https://example.com/first",
       },
       {
         type: "web_search_result",
-        title: "Annotation source",
-        url: "https://example.com/annotated",
+        title: "Third result source",
+        url: "https://example.com/third",
       },
     ]);
 

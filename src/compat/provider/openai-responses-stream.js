@@ -3,6 +3,8 @@ import {
   getEnvApiKey,
   supportsXhigh,
 } from "../runtime/pi-ai-compat.js";
+import { loadNativeSearchConfig } from "../../core/config/native-search-config.js";
+import { injectNativeWebSearch } from "../../core/payload/native-search.js";
 import {
   applyServiceTierPricing,
   buildInitialOutput,
@@ -76,6 +78,34 @@ function handleStreamError(stream, output, error, signal) {
   stream.end();
 }
 
+// Bootstrap installs a promise here rather than making the public extension hook
+// infer a model. A rejected overlay is intentionally ignored by this boundary:
+// the request still uses the documented provider path without private patches.
+let providerCompatReadiness;
+
+/**
+ * Установка readiness promise для authoritative provider boundary.
+ *
+ * @param {Promise<unknown> | undefined} readiness Bootstrap-owned readiness promise.
+ * @returns {void}
+ */
+export function setProviderCompatReadiness(readiness) {
+  providerCompatReadiness = readiness;
+}
+
+async function awaitProviderCompatReadiness(readiness) {
+  if (!readiness) {
+    return;
+  }
+
+  try {
+    await readiness;
+  } catch {
+    // Feature-level fail-open: do not turn an optional compat failure into a
+    // failed OpenAI Responses request.
+  }
+}
+
 /**
  * Patched OpenAI Responses stream с поддержкой web_search_call и citations.
  *
@@ -92,15 +122,22 @@ export const streamPatchedOpenAIResponses = (model, context, options) => {
     const output = buildInitialOutput(model);
 
     try {
+      await awaitProviderCompatReadiness(options?.providerCompatReadiness || providerCompatReadiness);
       const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
       const client = createOpenAIClient(model, apiKey, internals, options?.headers);
       let params = buildPatchedParams(model, context, options, internals);
+      // This is the sole model-aware request boundary: unlike the public hook,
+      // `model` is authoritative here and cannot be reconstructed from payload.
+      params = injectNativeWebSearch(params, model, options?.nativeSearchConfig || loadNativeSearchConfig());
       const nextParams = await options?.onPayload?.(params, model);
       if (nextParams !== undefined) {
         params = nextParams;
       }
-      const openaiStream = await client.responses.create(params, options?.signal ? { signal: options.signal } : undefined);
+      // Emit start before waiting for the provider response. This keeps the
+      // success sequence observable as start -> provider events -> done -> end;
+      // failures may still be start? -> error -> end.
       stream.push({ type: "start", partial: output });
+      const openaiStream = await client.responses.create(params, options?.signal ? { signal: options.signal } : undefined);
       await processResponsesStreamWithSearchDisplay(openaiStream, output, stream, model, {
         serviceTier: options?.serviceTier,
       }, {
@@ -148,10 +185,6 @@ export const streamPatchedOpenAIResponses = (model, context, options) => {
  */
 export const streamSimplePatchedOpenAIResponses = (model, context, options) => {
   const apiKey = options?.apiKey || getEnvApiKey(model.provider);
-  if (!apiKey) {
-    throw new Error(`No API key for provider: ${model.provider}`);
-  }
-
   const base = buildBaseOptions(model, options, apiKey);
   const reasoningEffort = supportsXhigh(model) ? options?.reasoning : clampReasoning(options?.reasoning);
   return streamPatchedOpenAIResponses(model, context, {

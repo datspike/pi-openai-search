@@ -150,24 +150,6 @@ function buildAssistantEventContext(output, contentIndex, compactMode = false, e
 }
 
 /**
- * Поиск терминального factual search call в `response.output`.
- *
- * @param {Array<any>} responseOutput Output items из Responses API.
- * @returns {string | undefined} ID последнего `action.type === "search"`.
- */
-function findTerminalSearchCallId(responseOutput) {
-  let terminalSearchCallId;
-
-  for (const item of responseOutput) {
-    if (item?.type === "web_search_call" && item?.action?.type === "search" && item.id) {
-      terminalSearchCallId = item.id;
-    }
-  }
-
-  return terminalSearchCallId;
-}
-
-/**
  * Обновление assistant message по полному response.completed.
  *
  * @param {any} output Partial/final assistant message.
@@ -179,11 +161,12 @@ function findTerminalSearchCallId(responseOutput) {
  */
 export function enrichOutputFromCompletedResponse(output, response, state, stream, compactMode = false) {
   const responseOutput = Array.isArray(response?.output) ? response.output : [];
-  const searchCalls = responseOutput.filter((item) => item?.type === "web_search_call");
+  const searchCalls = responseOutput.filter(
+    (item) => item?.type === "web_search_call" && typeof item.id === "string" && item.id.length > 0,
+  );
   const searchCallSourcesById = new Map(
     searchCalls.map((item) => [item.id, extractStructuredSearchCallSources(item.action, item.results)]),
   );
-  const terminalSearchCallId = findTerminalSearchCallId(responseOutput);
   const annotationSources = dedupeSources(
     responseOutput
       .filter((item) => item?.type === "message")
@@ -194,13 +177,15 @@ export function enrichOutputFromCompletedResponse(output, response, state, strea
   );
 
   for (const item of responseOutput) {
-    if (item?.type === "web_search_call") {
+    if (item?.type === "web_search_call" && typeof item.id === "string" && item.id.length > 0) {
       upsertSearchToolUseBlock(output, state, item, stream, compactMode);
 
       const perCallSources = searchCallSourcesById.get(item.id) || [];
-      const resultSources = item.id === terminalSearchCallId
-        ? resolveWebSearchResultSources(allSources, annotationSources)
-        : resolveWebSearchResultSources(perCallSources, []);
+      // A completed response can contain several search calls. Sources observed
+      // for one call must never be reassigned to another call merely because it
+      // happens to be the terminal item; annotations remain a separate textual
+      // citation seam and are not correlated to a search call.
+      const resultSources = resolveWebSearchResultSources(perCallSources, []);
       const resultContent = buildWebSearchResultContent(resultSources);
       const resultBlockIndex = state.searchResultBlockById.get(item.id);
       if (resultBlockIndex == null) {
@@ -217,7 +202,12 @@ export function enrichOutputFromCompletedResponse(output, response, state, strea
       } else {
         const existingResultBlock = output.content[resultBlockIndex];
         if (existingResultBlock?.type === "webSearchResult") {
-          existingResultBlock.content = resultContent;
+          const hasObservedSources = Array.isArray(existingResultBlock.content) && existingResultBlock.content.length > 0;
+          // A late completed payload may omit sources already observed in the
+          // stream. Empty data is not authoritative and must not erase them.
+          if (resultSources.length > 0 || !hasObservedSources) {
+            existingResultBlock.content = resultContent;
+          }
         }
       }
       continue;
@@ -254,6 +244,10 @@ export function enrichOutputFromCompletedResponse(output, response, state, strea
  * @returns {number} Индекс serverToolUse блока.
  */
 export function upsertSearchToolUseBlock(output, state, item, stream, compactMode = false) {
+  if (typeof item?.id !== "string" || item.id.length === 0) {
+    return -1;
+  }
+
   const nextInput = summarizeSearchInput(item.action);
   const toolBlockIndex = state.searchToolBlockById.get(item.id);
 
@@ -276,9 +270,17 @@ export function upsertSearchToolUseBlock(output, state, item, stream, compactMod
   const existingToolBlock = output.content[toolBlockIndex];
   if (existingToolBlock?.type === "serverToolUse") {
     const previousInput = JSON.stringify(existingToolBlock.input ?? {});
-    const updatedInput = JSON.stringify(nextInput);
-    existingToolBlock.input = nextInput;
-    if (previousInput !== updatedInput) {
+    // `output_item.added` frequently has no action yet. Do not let a later
+    // empty duplicate remove a query observed at an authoritative seam.
+    const existingInput = existingToolBlock.input ?? {};
+    const nextHasDetail = ["query", "queries", "url", "page_url", "pattern"]
+      .some((key) => nextInput[key] != null);
+    const existingHasDetail = ["query", "queries", "url", "page_url", "pattern"]
+      .some((key) => existingInput[key] != null);
+    if (nextHasDetail || !existingHasDetail) {
+      existingToolBlock.input = nextInput;
+    }
+    if (previousInput !== JSON.stringify(existingToolBlock.input ?? {})) {
       stream.push({
         type: "server_tool_use",
         ...buildAssistantEventContext(output, toolBlockIndex, compactMode, "server_tool_use"),
@@ -349,15 +351,7 @@ export async function processResponsesStreamWithSearchDisplay(
         output.content.push(currentBlock);
         stream.push({ type: "toolcall_start", ...currentEventContext("toolcall_start") });
       } else if (item.type === "web_search_call") {
-        output.content.push({
-          type: "serverToolUse",
-          id: item.id,
-          name: "web_search",
-          input: summarizeSearchInput(item.action),
-        });
-        state.searchCallIds.add(item.id);
-        state.searchToolBlockById.set(item.id, blockIndex());
-        stream.push({ type: "server_tool_use", ...currentEventContext("server_tool_use") });
+        upsertSearchToolUseBlock(output, state, item, stream, compactStreamEvents);
       }
     } else if (event.type === "response.reasoning_summary_part.added") {
       if (currentItem && currentItem.type === "reasoning") {
@@ -497,7 +491,7 @@ export async function processResponsesStreamWithSearchDisplay(
         };
         currentBlock = null;
         stream.push({ type: "toolcall_end", ...currentEventContext("toolcall_end"), toolCall });
-      } else if (item.type === "web_search_call") {
+      } else if (item.type === "web_search_call" && typeof item.id === "string" && item.id.length > 0) {
         upsertSearchToolUseBlock(output, state, item, stream, compactStreamEvents);
         const resultBlockIndex = state.searchResultBlockById.get(item.id);
         if (resultBlockIndex == null) {

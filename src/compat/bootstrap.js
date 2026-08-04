@@ -9,6 +9,7 @@ import {
 import {
   activateProviderCompat,
   probeProviderCompatCapability,
+  setProviderCompatReadiness,
 } from "./provider/openai-responses-provider.js";
 import { COMPAT_FEATURES } from "./runtime/pi-compat-capabilities.js";
 import { probePiCompatCapabilities } from "./runtime/pi-runtime.js";
@@ -101,6 +102,10 @@ export function bootstrapCompatRuntime(pi) {
       compatBootstrapPromise = undefined;
       throw error;
     });
+    // Provider streams await this only at their authoritative boundary. A
+    // rejected optional overlay is handled there as fail-open, not as a global
+    // extension/bootstrap failure.
+    setProviderCompatReadiness(compatBootstrapPromise);
   }
 
   return compatBootstrapPromise;

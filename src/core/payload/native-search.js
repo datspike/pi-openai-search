@@ -2,10 +2,16 @@ import { isOpenAIResponsesModel } from "../config/native-search-config.js";
 
 export { isOpenAIResponsesModel };
 
+// Remove only known search-tool duplicates. Unrelated custom tools stay intact.
 export const CUSTOM_SEARCH_TOOL_NAMES = new Set([
   "search-the-web",
   "search_and_read",
   "google_search",
+]);
+export const DIRECT_NATIVE_SEARCH_TOOL_TYPES = new Set([
+  "web_search",
+  "web_search_preview",
+  "web_search_preview_2025_03_11",
 ]);
 
 export const OPENAI_NATIVE_SEARCH_INCLUDE_FIELDS = new Set([
@@ -13,12 +19,15 @@ export const OPENAI_NATIVE_SEARCH_INCLUDE_FIELDS = new Set([
 ]);
 
 /**
- * Проверка точного прямого дубликата native web search.
+ * Проверка точного дубликата native web search.
  *
  * @param {unknown} tool Один model-visible tool из provider payload.
- * @returns {boolean} true только для известных function tools.
+ * @returns {boolean} true только для известных native/function duplicates.
  */
 export function isDirectSearchToolDuplicate(tool) {
+  if (DIRECT_NATIVE_SEARCH_TOOL_TYPES.has(tool?.type)) {
+    return true;
+  }
   return tool?.type === "function"
     && typeof tool.name === "string"
     && CUSTOM_SEARCH_TOOL_NAMES.has(tool.name);
@@ -128,20 +137,18 @@ export function injectNativeWebSearch(payload, model, config) {
   }
 
   const tools = Array.isArray(payload.tools) ? [...payload.tools] : [];
-  const hasNativeWebSearch = tools.some((tool) => tool?.type === "web_search");
-  const filteredTools = tools.filter((tool) => !isDirectSearchToolDuplicate(tool));
+  // Keep custom/unknown tools in their original order. Native Responses tools are
+  // rebuilt from the current config, which also collapses repeated applications.
+  const filteredTools = tools.filter(
+    (tool) => tool?.type !== "web_search" && !isDirectSearchToolDuplicate(tool),
+  );
 
   const webSearchTool = buildWebSearchTool(config);
   if (!webSearchTool) {
-    payload.tools = filteredTools;
     return payload;
   }
 
-  if (!hasNativeWebSearch) {
-    filteredTools.push(webSearchTool);
-  }
-
-  payload.tools = filteredTools;
+  payload.tools = [...filteredTools, webSearchTool];
   ensureNativeSearchIncludes(payload);
 
   if (payload.tool_choice == null) {

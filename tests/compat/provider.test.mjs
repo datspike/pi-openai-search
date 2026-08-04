@@ -123,6 +123,34 @@ test("provider compat activation respects capability matrix", async () => {
   assert.equal(typeof registrations[0].config.streamSimple, "function");
 });
 
+test("provider compat activation registers public provider once and does not use private fallback", async () => {
+  const registrations = [];
+  let privateRegistrations = 0;
+  const pi = {
+    registerProvider(name, config) {
+      registrations.push({ name, config });
+    },
+  };
+  const compat = {
+    ...workingPiAiCompat,
+    registerApiProvider() {
+      privateRegistrations += 1;
+    },
+  };
+  const summary = { features: { [COMPAT_FEATURES.providerCompat]: { supported: true } } };
+
+  assert.equal(await activateProviderCompat(pi, summary, {
+    loadOpenAIResponsesInternals: loadWorkingInternals,
+    piAiCompat: compat,
+  }), true);
+  assert.equal(await activateProviderCompat(pi, summary, {
+    loadOpenAIResponsesInternals: loadWorkingInternals,
+    piAiCompat: compat,
+  }), true);
+  assert.equal(registrations.length, 1);
+  assert.equal(privateRegistrations, 0);
+});
+
 test("provider compat activation skips unsupported feature", async () => {
   const applied = await activateProviderCompat(
     {
