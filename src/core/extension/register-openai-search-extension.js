@@ -7,6 +7,12 @@ import { getFactualSearchLifecycleUpdate } from "../lifecycle/search-status.js";
 import { writeDebugSnapshot, writeMessageDebugSnapshot } from "./debug-snapshots.js";
 
 export const NATIVE_SEARCH_STATUS_KEY = "openai-native-web-search";
+const PAYLOAD_MODEL_CONTEXT_SYMBOL = Symbol.for("pi.openai-search.payload-model-context");
+
+function getPayloadModelContext(payload) {
+  const contexts = globalThis[PAYLOAD_MODEL_CONTEXT_SYMBOL];
+  return contexts instanceof WeakMap ? contexts.get(payload) : undefined;
+}
 
 /**
  * Получение последнего активного factual search.
@@ -90,7 +96,7 @@ export function registerCoreOpenAISearchExtension(pi, options = {}) {
     }
 
     const config = loadNativeSearchConfig();
-    const model = event?.model;
+    const model = event?.model ?? getPayloadModelContext(payload);
     const nextPayload = injectNativeWebSearch(payload, model, config);
 
     const debugPath = process.env.PI_OPENAI_NATIVE_SEARCH_DEBUG_FILE;
