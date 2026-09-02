@@ -7,6 +7,7 @@
 - автономный `pi`
 - `provider=openai` + `api=openai-responses`
 - `provider=openai-codex` + `api=openai-codex-responses`
+- `provider=cliproxyapi` + `api=cliproxyapi-codex-responses`
 - Azure, произвольные OpenAI-compatible поставщики и данные без метаданных модели не изменяются
 - проверенная базовая среда выполнения: `pi 0.65.0`
 

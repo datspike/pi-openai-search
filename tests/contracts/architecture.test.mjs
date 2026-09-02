@@ -19,6 +19,7 @@ test("architecture contract keeps supported runtime narrow", () => {
     models: [
       { provider: "openai", api: "openai-responses" },
       { provider: "openai-codex", api: "openai-codex-responses" },
+      { provider: "cliproxyapi", api: "cliproxyapi-codex-responses" },
     ],
     testedBaselineVersion: "0.65.0",
   });

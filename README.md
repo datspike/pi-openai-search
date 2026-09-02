@@ -1,6 +1,6 @@
 # pi-openai-search
 
-Extension для standalone `pi`, который включает native OpenAI `web_search` только для явных маршрутов OpenAI Responses и OpenAI Codex Responses. Поверх core включён default-on compat-enhanced интерфейс без synthetic fallback.
+Extension для standalone `pi`, который включает native OpenAI `web_search` только для явных маршрутов OpenAI Responses, OpenAI Codex Responses и CLIProxyAPI Codex Responses. Поверх core включён default-on compat-enhanced интерфейс без synthetic fallback.
 
 ## Support contract
 
@@ -9,6 +9,7 @@ Stable contract:
 - автономный `pi`
 - `provider=openai` + `api=openai-responses`
 - `provider=openai-codex` + `api=openai-codex-responses`
+- `provider=cliproxyapi` + `api=cliproxyapi-codex-responses`
 - Azure, произвольные OpenAI-compatible поставщики и данные без метаданных модели не изменяются
 - достоверная политика payload/source через `src/core/**`
 
@@ -47,7 +48,7 @@ Compat-enhanced contract:
 
 ## Что делает core
 
-- включает native OpenAI `web_search` только для двух поддерживаемых provider/API пар
+- включает native OpenAI `web_search` только для трёх поддерживаемых provider/API пар
 - удаляет только точные прямые function-tool дубликаты: `search-the-web`, `search_and_read`, `google_search`
 - не скрывает `bx`, Brave/MCP gateway и прочие инструменты по словам `search`, `brave`, `bx` или `mcp`
 - добавляет `include: ["web_search_call.action.sources"]`
@@ -74,8 +75,9 @@ pi --extension ~/hobby/pi-openai-search
 ```bash
 PI_OPENAI_NATIVE_SEARCH=1 \
 PI_OPENAI_NATIVE_SEARCH_MODE=live \
+CLIPROXYAPI_API_KEY="$OPENAI_API_KEY" \
   pi --extension "$PWD/index.js" --mode text --print --no-session \
-  --model openai/gpt-5.4 \
+  --model cliproxyapi/gpt-5.6-sol \
   'Найди свежие заметки про OpenAI Responses API web_search и кратко перескажи с источниками.'
 ```
 

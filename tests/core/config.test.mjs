@@ -49,10 +49,14 @@ test("loadNativeSearchConfig reads stable env overrides", () => {
   });
 });
 
-test("isOpenAIResponsesModel accepts only OpenAI and OpenAI Codex transports", () => {
+test("isOpenAIResponsesModel accepts supported OpenAI and CLIProxyAPI transports", () => {
   assert.equal(isOpenAIResponsesModel({ provider: "openai", api: "openai-responses" }), true);
   assert.equal(
     isOpenAIResponsesModel({ provider: "openai-codex", api: "openai-codex-responses" }),
+    true,
+  );
+  assert.equal(
+    isOpenAIResponsesModel({ provider: "cliproxyapi", api: "cliproxyapi-codex-responses" }),
     true,
   );
   assert.equal(isOpenAIResponsesModel({ provider: "azure", api: "azure-openai-responses" }), false);

@@ -1,6 +1,7 @@
 export const OPENAI_NATIVE_SEARCH_MODELS = Object.freeze([
   Object.freeze({ provider: "openai", api: "openai-responses" }),
   Object.freeze({ provider: "openai-codex", api: "openai-codex-responses" }),
+  Object.freeze({ provider: "cliproxyapi", api: "cliproxyapi-codex-responses" }),
 ]);
 
 /**

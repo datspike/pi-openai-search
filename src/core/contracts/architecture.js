@@ -3,6 +3,7 @@ export const SUPPORTED_RUNTIME = Object.freeze({
   models: Object.freeze([
     Object.freeze({ provider: "openai", api: "openai-responses" }),
     Object.freeze({ provider: "openai-codex", api: "openai-codex-responses" }),
+    Object.freeze({ provider: "cliproxyapi", api: "cliproxyapi-codex-responses" }),
   ]),
   testedBaselineVersion: "0.65.0",
 });
