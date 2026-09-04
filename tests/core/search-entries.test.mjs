@@ -60,6 +60,8 @@ test("entry renderer creates separate visual cards, expands details and removes 
   assert.doesNotMatch(collapsed, /source 0|\x1b/);
   assert.match(expanded, /source 14/);
   assert.doesNotMatch(expanded, /\x1b/);
+  const legacy = renderNativeSearchEntry(entry, { expanded: false }, theme, Text);
+  assert.equal(legacy.text, "⌕ Web search\nSearched test");
 });
 
 test("turn_end appends one TUI-only entry per message and keeps negative path empty", () => {

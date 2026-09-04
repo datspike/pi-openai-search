@@ -27,20 +27,28 @@ export function collectNativeSearchEntries(message) {
 }
 
 /** Рендерит отдельные карточки поиска, не перечитывая сессию и не меняя контекст модели. */
-export function renderNativeSearchEntry(entry, { expanded }, theme, { Box, Text, VStack }) {
+export function renderNativeSearchEntry(entry, { expanded }, theme, components) {
+  const Text = typeof components?.Text === "function" ? components.Text
+    : typeof components === "function" ? components : undefined;
+  const Box = typeof components?.Box === "function" ? components.Box : undefined;
+  const VStack = typeof components?.VStack === "function" ? components.VStack : undefined;
   const searches = Array.isArray(entry.data?.searches) ? entry.data.searches : [];
   const clean = (value) => stripVTControlCharacters(String(value ?? "")).replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "");
-  const cards = [];
-  for (const search of searches) {
-    const card = new Box(1, 0, (text) => theme.bg("customMessageBg", text));
+  const cardLines = searches.map((search) => {
     const title = theme.bold(theme.fg(search.isError ? "error" : "customMessageLabel", "⌕ Web search"));
     const label = theme.fg("customMessageText", clean(search.label));
     const output = clean(search.output);
-    const details = expanded && output ? `\n${theme.fg("toolOutput", output)}` : "";
-    card.addChild(new Text(`${title}\n${label}${details}`));
-    cards.push(card);
-  }
-  if (cards.length === 0) return new Text("");
+    return expanded && output ? [title, label, theme.fg("toolOutput", output)] : [title, label];
+  });
+  if (typeof Text !== "function") return { render: () => [] };
+  // During Pi hot reload an old index module can still pass just Text. Keep the
+  // persisted entry readable instead of crashing; a normal/new reload uses cards.
+  if (!Box || !VStack) return new Text(cardLines.flat().join("\n"));
+  const cards = cardLines.map((lines) => {
+    const card = new Box(1, 0, (text) => theme.bg("customMessageBg", text));
+    card.addChild(new Text(lines.join("\n")));
+    return card;
+  });
   return new VStack(cards, { gap: 1 });
 }
 
