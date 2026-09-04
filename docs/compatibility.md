@@ -40,12 +40,15 @@ Cannot find package '@earendil-works/pi-server' imported from .../dist/experimen
 
 Публичный API Pi `0.85.0` не даёт расширению сырые события Responses: `after_provider_response` содержит статус и заголовки, а `message_update` — уже преобразованные события. Поэтому provider compat пока сохраняется для `openai/openai-responses` и использует внутренние вспомогательные модули pi-ai.
 
-Для `openai-codex` и `cliproxyapi` сохраняется инъекция `web_search`. Проверенные встроенные Codex-потоки не проецируют `web_search_call` в `serverToolUse` / `webSearchResult`; без этих данных карточка не появляется. Из текста ответа события и источники не выдумываются. Изменение Codex transport не входит в исправление UI.
+Для `openai-codex` сохраняется инъекция `web_search`, но встроенный поток не проецирует `web_search_call` в `serverToolUse` / `webSearchResult`. Для локального `pi-cliproxyapi-provider` поток публикует сырые наблюдаемые Responses-события через `cliproxyapi:responses-event`; расширение преобразует только `web_search_call` и его структурированные sources. Из текста ответа события и источники не выдумываются.
 
 ## Проверки
 
 - `npm test` — модульные, контрактные проверки и запуск установленного CLI с локальным тестовым провайдером.
 - `npm run test:compat-smoke` — проверка текущих defaults и доступных compat-возможностей.
 - `node --test tests/proof/public-ui.test.mjs` — порядок записей в JSONL, отсутствие карточки без поиска, исключение карточки из контекста модели и рендер на узком терминале.
+- `python3 scripts/verify-cliproxy-search-tui.py --provider-extension /home/spike/hobby/pi-cliproxyapi-provider --output PATH` — обязательная живая проверка на Terra: контрольный ход без поиска, настоящий поиск, совпадение raw ID с карточкой, `/reload`, восстановление карточки и следующий ход без поиска.
+
+Локальный тестовый провайдер покрывает регрессии публичного renderer, но не считается доказательством работы CLIProxyAPI. Приёмка этого маршрута требует живого прогона через `cliproxyapi/gpt-5.6-terra` в `regular` и `fullscreen` TUI.
 
 Тестовый провайдер не выполняет сетевых запросов. Проверка с настоящим OpenAI запускается отдельно через `PI_OPENAI_NATIVE_SEARCH_LIVE_TEST=1` и требует учётных данных.

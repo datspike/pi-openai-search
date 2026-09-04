@@ -1,0 +1,8 @@
+{
+  "origin": "Реальный cliproxyapi/gpt-5.6-terra, WebSocket; из квитанции terra-regular-3. ID заменён, сохранены наблюдаемые поля поиска. Текст и reasoning не включены.",
+  "events": [
+    {"type":"response.output_item.added","item":{"id":"ws_live_terra","type":"web_search_call","status":"in_progress"}},
+    {"type":"response.output_item.done","item":{"id":"ws_live_terra","type":"web_search_call","status":"completed","action":{"type":"search","queries":["site:python.org downloads latest stable Python release"],"query":"site:python.org downloads latest stable Python release"}}},
+    {"type":"response.completed","response":{"output":[{"id":"ws_live_terra","type":"web_search_call","status":"completed","action":{"type":"search","queries":["site:python.org downloads latest stable Python release"],"query":"site:python.org downloads latest stable Python release"}}]}}
+  ]
+}

@@ -183,6 +183,7 @@ async function loadTestableExtensionModule(
       JSON.stringify(pathToFileURL(transformedCoreExtensionPath).href),
     )
     .replace('"./src/compat/bootstrap.js"', JSON.stringify(pathToFileURL(transformedCompatBootstrapPath).href))
+    .replace('"./src/compat/provider/cliproxy-search-events.js"', JSON.stringify(new URL("../src/compat/provider/cliproxy-search-events.js", import.meta.url).href))
     .replace('"./src/core/extension/search-entries.js"', JSON.stringify(new URL("../src/core/extension/search-entries.js", import.meta.url).href));
 
   fs.writeFileSync(transformedModulePath, transformedSource, "utf8");

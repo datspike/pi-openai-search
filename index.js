@@ -2,6 +2,7 @@ import { Text } from "@earendil-works/pi-tui";
 import { registerCoreOpenAISearchExtension } from "./src/core/extension/register-openai-search-extension.js";
 import { bootstrapCompatRuntime } from "./src/compat/bootstrap.js";
 import { registerNativeSearchEntries } from "./src/core/extension/search-entries.js";
+import { registerCliproxySearchEvents } from "./src/compat/provider/cliproxy-search-events.js";
 
 /**
  * Core-first extension для native OpenAI web_search.
@@ -22,6 +23,7 @@ export default async function registerOpenAISearchExtension(pi) {
   });
 
   const compat = await compatRuntimePromise;
+  registerCliproxySearchEvents(pi);
   // Публичные записи заменяют UI-патчи, но не дублируют явно включённый inline-режим.
   if (!compat.activation.appliedFeatures.includes("interactive-inline")
       && typeof pi.registerEntryRenderer === "function" && typeof pi.appendEntry === "function") {
