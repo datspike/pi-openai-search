@@ -177,11 +177,13 @@ async function loadTestableExtensionModule(
 
   const transformedSource = fs
     .readFileSync(sourcePath, "utf8")
+    .replace('"@earendil-works/pi-tui"', '"data:text/javascript,export class Text {}"')
     .replace(
       '"./src/core/extension/register-openai-search-extension.js"',
       JSON.stringify(pathToFileURL(transformedCoreExtensionPath).href),
     )
-    .replace('"./src/compat/bootstrap.js"', JSON.stringify(pathToFileURL(transformedCompatBootstrapPath).href));
+    .replace('"./src/compat/bootstrap.js"', JSON.stringify(pathToFileURL(transformedCompatBootstrapPath).href))
+    .replace('"./src/core/extension/search-entries.js"', JSON.stringify(new URL("../src/core/extension/search-entries.js", import.meta.url).href));
 
   fs.writeFileSync(transformedModulePath, transformedSource, "utf8");
   return import(pathToFileURL(transformedModulePath).href);
@@ -2178,7 +2180,7 @@ test("resolvePiRuntimeRoot auto-detects installed standalone pi runtime", (t) =>
   }
 });
 
-test("loadExtensions imports extension without hard failure", async (t) => {
+test("packaged CLI imports extension without private loader dependencies", async (t) => {
   let runtimeRoot;
   try {
     runtimeRoot = resolvePiRuntimeRoot();
@@ -2186,18 +2188,22 @@ test("loadExtensions imports extension without hard failure", async (t) => {
     t.skip(error instanceof Error ? error.message : String(error));
     return;
   }
-
-  const piAiModule = await importPiRuntimeModule("node_modules/@mariozechner/pi-ai/dist/index.js");
-  const loaderModule = await importPiRuntimeModule("dist/core/extensions/loader.js");
-
-  piAiModule.resetApiProviders();
+  const tempDir = fs.mkdtempSync(path.join(process.cwd(), ".tmp-pi-cli-load-"));
   try {
-    const result = await loaderModule.loadExtensions([path.resolve("index.js")], process.cwd());
-
-    assert.equal(result.errors.length, 0);
-    assert.equal(result.extensions.length, 1);
+    const pkg = JSON.parse(fs.readFileSync(path.join(runtimeRoot, "package.json"), "utf8"));
+    const result = spawnSync(process.execPath, [
+      path.resolve(runtimeRoot, pkg.bin.pi), "--no-extensions", "-e", path.resolve("index.js"),
+      "--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files",
+      "--no-approve", "--list-models",
+    ], {
+      cwd: tempDir, encoding: "utf8", timeout: 30000,
+      env: { ...process.env, PI_CODING_AGENT_DIR: tempDir, PI_OFFLINE: "1",
+        PI_OPENAI_NATIVE_SEARCH_INTERACTIVE_COMPAT: "false", PI_OPENAI_NATIVE_SEARCH_TOOL_RENDER_COMPAT: "false" },
+    });
+    assert.equal(result.status, 0, result.stderr || result.error?.message);
+    assert.doesNotMatch(result.stderr + result.stdout, /Failed to load extension|UI compat|Cannot find package/);
   } finally {
-    piAiModule.resetApiProviders();
+    fs.rmSync(tempDir, { recursive: true, force: true });
   }
 });
 
@@ -2785,3 +2791,36 @@ process.exit(0);
     assert.equal(result.stopReason, "stop");
   },
 );
+
+test("async extension startup keeps core and public UI when optional compat rejects", async () => {
+  const tempDir = fs.mkdtempSync(path.join(process.cwd(), ".tmp-pi-compat-rejection-"));
+  try {
+    const extension = await loadTestableExtensionModule(tempDir, {
+      fsPromisesLines: ['export async function mkdir() {}', 'export async function writeFile() {}'],
+      nativeSearchLines: [
+        'export function injectNativeWebSearch(payload) { return payload; }',
+        'export function isOpenAIResponsesModel() { return true; }',
+        'export function loadNativeSearchConfig() { return { enabled: true, mode: "live" }; }',
+      ],
+      providerCompatLines: [
+        'export function setProviderCompatReadiness() {}',
+        'export async function probeProviderCompatCapability() {}',
+        'export async function activateProviderCompat() { throw new Error("fixture compat failure"); }',
+      ],
+    });
+    const handlers = new Map();
+    const notifications = [];
+    await extension.default({
+      on: (name, handler) => handlers.set(name, handler),
+      registerEntryRenderer() {}, appendEntry() {},
+    });
+    assert.equal(typeof handlers.get("before_provider_request"), "function");
+    assert.equal(typeof handlers.get("turn_end"), "function");
+    await handlers.get("model_select")({ model: { provider: "openai", id: "fixture" } }, {
+      hasUI: true, ui: { setWorkingMessage() {}, setStatus() {}, notify: (text) => notifications.push(text) },
+    });
+    assert.ok(notifications.some((text) => text.includes("fixture compat failure")));
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});

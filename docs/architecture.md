@@ -1,111 +1,65 @@
 # Архитектура `pi-openai-search`
 
-## Supported runtime
+## Область поддержки
 
-Поддерживаемая область действия намеренно узкая:
+Standalone Pi; проверенная среда — `0.85.0`.
 
-- автономный `pi`
-- `provider=openai` + `api=openai-responses`
-- `provider=openai-codex` + `api=openai-codex-responses`
-- `provider=cliproxyapi` + `api=cliproxyapi-codex-responses`
-- Azure, произвольные OpenAI-compatible поставщики и данные без метаданных модели не изменяются
-- проверенная базовая среда выполнения: `pi 0.65.0`
+- `openai` / `openai-responses`
+- `openai-codex` / `openai-codex-responses`
+- `cliproxyapi` / `cliproxyapi-codex-responses`
 
-Unknown `pi` version не считается hard blocker'ом сама по себе. Разрешение compat идёт capability-first: если probe проходит, compat path остаётся допустимым. Все три compat-возможности включены по умолчанию и отключаются только явным `false` в соответствующей env-переменной.
+Azure, произвольные OpenAI-compatible провайдеры и запросы без метаданных модели не изменяются. Инъекция поиска и наличие структурированных событий — разные возможности; ограничения маршрутов описаны в [compatibility.md](./compatibility.md).
 
 ## Слои
 
 ### `src/core/**`
 
-Стабильный слой на публичных hooks:
+Основной слой использует публичные hooks:
 
-- `model_select`
-- `before_provider_request`
-- `message_update`
-- `message_end`
+- `model_select` — статус выбранной модели и предупреждения;
+- `before_provider_request` — инъекция поиска;
+- `message_update` — статус наблюдаемого поиска;
+- `message_end` — сброс незавершённого статуса и диагностический снимок;
+- `turn_end` — сохранение итоговой карточки.
 
-Ответственность core:
+`search-entries.js` собирает пары `serverToolUse` / `webSearchResult` по идентификатору. Через `appendEntry` сохраняется отдельная запись `openai-native-search-results`. `registerEntryRenderer` и публичный `Text` отвечают за отображение, перенос строк и раскрытие. Карточка следует после сообщения ассистента и не попадает в контекст модели. Само сообщение не изменяется.
 
-- стабильное окружение и изменение данных запроса только для двух явных provider/API пар
-- удаление только точных прямых function-tool дубликатов `search-the-web`, `search_and_read`, `google_search`
-- сохранение `bx`, Brave/MCP шлюза и любых неизвестных инструментов без эвристики по имени
-- политика достоверности источников
-- статус жизненного цикла для поиска фактов
-- безопасное ограничение функциональности без знания внутреннего устройства закрытой среды выполнения
-
-`core` не импортирует `src/compat/**` и закрытые модули среды выполнения.
+Core не импортирует compat или закрытые модули Pi. Компонент `Text` передаётся из точки входа.
 
 ### `src/compat/**`
 
-Compat framework для private seams standalone `pi`.
+Здесь остаются обнаружение runtime, проверки возможностей, provider compat и старые UI-патчи.
 
-Ответственность compat:
+- `provider-compat` включён по умолчанию: регистрация через публичный `registerProvider`, внутренние pi-ai helpers для разбора Responses.
+- `interactive-inline` и `tool-render` выключены по умолчанию. Их включение требует явного `true` в соответствующей env-переменной.
+- Отключённые UI-возможности не импортируют классы Pi, не проверяют их прототипы и не порождают предупреждения.
 
-- runtime discovery
-- version classification
-- capability probes
-- feature activation
-- diagnostics и feature-level warnings
+## Запуск
 
-## Lifecycle contract
+Асинхронная фабрика `index.js`:
 
-Boot path разбит на три части:
+1. Один раз запускает `bootstrapCompatRuntime(pi)`.
+2. Регистрирует core hooks и передаёт им promise с результатом bootstrap.
+3. Дожидается активации provider compat до окончания загрузки расширения.
+4. Регистрирует публичный UI, если API доступен и старый inline-патч не был успешно применён.
 
-1. `bootstrapCompatRuntime(pi)`
-2. `probePiCompatCapabilities(pi, probes)`
-3. `activateCompatFeatures(pi, capabilitySummary)`
+Запуск без `model_select` поддерживается. Карточки не зависят от события выбора модели. Состояние истории принадлежит Pi, отдельного глобального кеша карточек нет.
 
-`index.js` вызывает bootstrap один раз при регистрации extension. После этого `core` получает promise с compat summary и не инициирует второй bootstrap.
+## Проверки совместимости
 
-Это закрывает два режима:
+Для каждой compat-возможности сохраняются `enabled`, `status`, `supported`, `reason`, `diagnostics`. Сводный статус: `supported`, `partial` или `unavailable`.
 
-- с `model_select` -> UI warnings и status появляются поздно, когда модель известна
-- без `model_select` -> backend path и compat overlays уже готовы за счёт раннего bootstrap
+Неизвестная версия сама по себе не блокирует запуск. Предупреждения относятся только к недоступным включённым возможностям; версия остаётся в диагностике. Отказ UI compat не должен превращаться в отказ поискового запроса.
 
-## Capability registry
+## Достоверность
 
-Фичи compat ограничены тремя ключами:
+Допустимые источники:
 
-- `provider-compat`
-- `interactive-inline`
-- `tool-render`
+- `web_search_call.action.sources`;
+- `message.output_text.annotations`;
+- наблюдаемый дополнительный формат `web_search_call.results`;
+- реально присутствующие ссылки в финальном тексте для существующей политики источников, но не для создания UI-карточек.
 
-Для каждой фичи summary хранит:
+Запрещены искусственные citations, запросы из пользовательского prompt и выдуманные `webSearchResult`. Карточки используют только наблюдаемые структурированные блоки. Ошибка и прерывание не выдаются за успешный поиск.
 
-- `enabled`
-- `status`
-- `supported`
-- `reason`
-- `diagnostics`
-
-Итоговый compat status бывает:
-
-- `supported`
-- `partial`
-- `unavailable`
-
-## Version policy
-
-Версия runtime классифицируется отдельно от feature support:
-
-- `0.65.0` -> baseline `supported`
-- любая другая определённая версия -> `unknown`, но без user-facing warning
-- версия не определилась -> `unknown`, probing остаётся capability-first
-
-User-facing warnings строятся только из реально недоступных compat-фич. Диагностика версии остаётся maintainer/debug surface.
-
-## Truthful policy
-
-Допустимые source seams:
-
-- `web_search_call.action.sources`
-- `message.output_text.annotations`
-- defensive observed seam `web_search_call.results`
-- inline URLs в финальном тексте, если они реально наблюдаемы
-
-Запрещено:
-
-- synthetic citations
-- synthetic query labels
-- fabricated `webSearchResult`
-- prompt-derived search artifacts
+Из списка function tools удаляются только точные дубликаты `search-the-web`, `search_and_read`, `google_search`. Неизвестные инструменты и Brave/MCP шлюзы не скрываются по имени.

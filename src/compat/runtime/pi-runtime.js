@@ -346,8 +346,8 @@ export async function importPiRuntimeModule(relativePath) {
  */
 export async function probePiCompatCapabilities(pi, probes = {}) {
   const providerEnabled = parseCompatBoolean(process.env.PI_OPENAI_NATIVE_SEARCH_PROVIDER_COMPAT, true);
-  const inlineEnabled = parseCompatBoolean(process.env.PI_OPENAI_NATIVE_SEARCH_INTERACTIVE_COMPAT, true);
-  const toolRenderEnabled = parseCompatBoolean(process.env.PI_OPENAI_NATIVE_SEARCH_TOOL_RENDER_COMPAT, true);
+  const inlineEnabled = parseCompatBoolean(process.env.PI_OPENAI_NATIVE_SEARCH_INTERACTIVE_COMPAT, false);
+  const toolRenderEnabled = parseCompatBoolean(process.env.PI_OPENAI_NATIVE_SEARCH_TOOL_RENDER_COMPAT, false);
   let descriptor;
 
   try {

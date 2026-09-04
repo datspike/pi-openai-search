@@ -1,4 +1,4 @@
-export const PI_BASELINE_VERSION = "0.65.0";
+export const PI_BASELINE_VERSION = "0.85.0";
 
 export const COMPAT_FEATURES = Object.freeze({
   providerCompat: "provider-compat",

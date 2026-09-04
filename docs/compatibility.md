@@ -1,41 +1,51 @@
-# Compatibility matrix
+# Совместимость
 
-## Supported runtime matrix
+## Проверенная среда
 
-| Runtime | Status | Notes |
+Базовая версия: standalone Pi `0.85.0`. Неизвестная версия сама по себе не блокирует запуск: возможности проверяются отдельно. `0.65.0` остаётся исторической базой старых UI-патчей, а не гарантией поддержки нового интерфейса.
+
+| Возможность | По умолчанию | Требование |
 |---|---|---|
-| standalone `pi 0.65.0` | tested baseline | publication baseline |
-| standalone `pi` unknown version | allowed if probe passes | diagnostics only, no user-facing version warning |
-| non-standalone `pi` / other runtimes | unsupported | out of scope |
+| Итоговые карточки поиска | включены | публичные `registerEntryRenderer`, `appendEntry`, событие `turn_end`, `Text` из `@earendil-works/pi-tui` |
+| `provider-compat` | включён | `registerProvider()` либо старый `registerApiProvider()`, совместимые модули pi-ai |
+| `interactive-inline` | выключен | явный `PI_OPENAI_NATIVE_SEARCH_INTERACTIVE_COMPAT=true` и совместимые внутренние UI-классы |
+| `tool-render` | выключен | явный `PI_OPENAI_NATIVE_SEARCH_TOOL_RENDER_COMPAT=true` и совместимый `ToolExecutionComponent` |
 
-## Feature expectations
+Если inline-патч явно включён и применён, публичная карточка не регистрируется, чтобы не дублировать результат. Если проверка inline-патча не прошла, используется публичная карточка, а предупреждение об отказе запрошенного режима сохраняется.
 
-Все compat-возможности включены, если соответствующая env-переменная отсутствует. Значение `false` — явный opt-out отдельной возможности.
+## Почему убран обязательный UI compat
 
-| Feature | Env flag | Default | Expected probe |
-|---|---|---|---|
-| `provider-compat` | `PI_OPENAI_NATIVE_SEARCH_PROVIDER_COMPAT` | on | доступен `pi.registerProvider()` или private `registerApiProvider()` |
-| `interactive-inline` | `PI_OPENAI_NATIVE_SEARCH_INTERACTIVE_COMPAT` | on | совместимы patch targets `AssistantMessageComponent`, `ToolExecutionComponent`, `InteractiveMode` |
-| `tool-render` | `PI_OPENAI_NATIVE_SEARCH_TOOL_RENDER_COMPAT` | on | совместим `ToolExecutionComponent.prototype.formatToolExecution()` |
+На установленном Pi `0.85.0` импорт `dist/modes/interactive/interactive-mode.js` завершается ошибкой:
 
-## Degradation policy
+```text
+Cannot find package '@earendil-works/pi-server' imported from .../dist/experimental/server.js
+```
 
-| Сценарий | Поведение |
-|---|---|
-| runtime root не найден | core path продолжает работать, compat features получают `unavailable` |
-| provider compat недоступен | native search остаётся рабочим, truthful search blocks не форсятся synthetic fallback'ом |
-| inline patch недоступен | interactive chronology остаётся штатной runtime-логикой без hard failure |
-| tool-render patch недоступен | web_search блоки не получают enhanced truthful formatting |
-| unknown runtime version при успешном probe | compat продолжает работать, событие остаётся только в diagnostics |
+Это транзитивная зависимость старого патча, а не ошибка поискового запроса. Кроме того, установленный CLI запускается из `dist/bundle/cli.js`: успешный импорт отдельного unbundled-класса не доказывает, что патч изменил экземпляр класса, используемый CLI.
 
-## Compat smoke
+Публичные `appendEntry` и `registerEntryRenderer` позволяют сохранить итоговую карточку в истории без добавления сообщения в контекст модели. Они описаны в установленном `docs/extensions.md`; пример — `examples/extensions/entry-renderer.ts`. Для переноса строк используется публичный `Text`, описанный в `docs/tui.md`.
 
-`npm run test:compat-smoke` проверяет узкий drift-check:
+Поэтому исправление не устанавливает `pi-server`, не меняет файлы Pi и не адаптирует старый патч к очередной внутренней структуре.
 
-- runtime descriptor
-- version classification
-- provider capability probe
-- interactive inline capability probe
-- tool-render capability probe
+## Что сохраняется и что меняется
 
-Smoke не заменяет полный `npm test`, а даёт быстрый сигнал после обновления standalone `pi`.
+- Существующий статус поиска работает через `message_update`, `setStatus` и `setWorkingMessage`.
+- Итоговая карточка добавляется на `turn_end`, после сохранённого сообщения ассистента. После перезапуска порядок тот же.
+- Внутри ответа блоки поиска больше не вставляются. Карточка содержит итоговые данные всего хода, а не потоковую копию ответа.
+- Нет наблюдаемых вызовов поиска — нет карточки. Неполный или прерванный поиск не маркируется успешным.
+- Карточка сохраняется и в неинтерактивной сессии, но рисуется только TUI. Она не участвует в запросах модели.
+- Без публичного API карточек остаётся существующий статус; старые UI-патчи автоматически не включаются.
+
+## Оставшаяся граница provider compat
+
+Публичный API Pi `0.85.0` не даёт расширению сырые события Responses: `after_provider_response` содержит статус и заголовки, а `message_update` — уже преобразованные события. Поэтому provider compat пока сохраняется для `openai/openai-responses` и использует внутренние вспомогательные модули pi-ai.
+
+Для `openai-codex` и `cliproxyapi` сохраняется инъекция `web_search`. Проверенные встроенные Codex-потоки не проецируют `web_search_call` в `serverToolUse` / `webSearchResult`; без этих данных карточка не появляется. Из текста ответа события и источники не выдумываются. Изменение Codex transport не входит в исправление UI.
+
+## Проверки
+
+- `npm test` — модульные, контрактные проверки и запуск установленного CLI с локальным тестовым провайдером.
+- `npm run test:compat-smoke` — проверка текущих defaults и доступных compat-возможностей.
+- `node --test tests/proof/public-ui.test.mjs` — порядок записей в JSONL, отсутствие карточки без поиска, исключение карточки из контекста модели и рендер на узком терминале.
+
+Тестовый провайдер не выполняет сетевых запросов. Проверка с настоящим OpenAI запускается отдельно через `PI_OPENAI_NATIVE_SEARCH_LIVE_TEST=1` и требует учётных данных.

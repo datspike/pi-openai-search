@@ -21,18 +21,19 @@ test("architecture contract keeps supported runtime narrow", () => {
       { provider: "openai-codex", api: "openai-codex-responses" },
       { provider: "cliproxyapi", api: "cliproxyapi-codex-responses" },
     ],
-    testedBaselineVersion: "0.65.0",
+    testedBaselineVersion: "0.85.0",
   });
 });
 
-test("compat contract exposes default-enabled capability-first policy", () => {
+test("compat contract defaults to public UI and requires opt-in for private patches", () => {
   assert.deepEqual(CANONICAL_CONTRACT_MAP.compatCapabilities.features, [
     "provider-compat",
     "interactive-inline",
     "tool-render",
   ]);
-  assert.equal(CANONICAL_CONTRACT_MAP.compatCapabilities.policy.defaultEnabled, true);
-  assert.equal(CANONICAL_CONTRACT_MAP.compatCapabilities.policy.optOut, "per-feature-env-false");
+  assert.deepEqual(CANONICAL_CONTRACT_MAP.compatCapabilities.policy.defaultEnabled, ["provider-compat"]);
+  assert.deepEqual(CANONICAL_CONTRACT_MAP.compatCapabilities.policy.optIn, ["interactive-inline", "tool-render"]);
+  assert.equal(CANONICAL_CONTRACT_MAP.compatCapabilities.policy.publicUI, "appendEntry + registerEntryRenderer");
   assert.equal(CANONICAL_CONTRACT_MAP.compatCapabilities.policy.unknownVersion, "allowed-if-probe-passes");
 });
 

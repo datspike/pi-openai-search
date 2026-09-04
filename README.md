@@ -1,6 +1,6 @@
 # pi-openai-search
 
-Extension для standalone `pi`, который включает native OpenAI `web_search` только для явных маршрутов OpenAI Responses, OpenAI Codex Responses и CLIProxyAPI Codex Responses. Поверх core включён default-on compat-enhanced интерфейс без synthetic fallback.
+Расширение standalone `pi`, которое включает нативный OpenAI `web_search` только для явных маршрутов OpenAI Responses, OpenAI Codex Responses и CLIProxyAPI Codex Responses. По умолчанию интерфейс использует публичный API Pi без патчей его UI-классов.
 
 ## Support contract
 
@@ -13,15 +13,14 @@ Stable contract:
 - Azure, произвольные OpenAI-compatible поставщики и данные без метаданных модели не изменяются
 - достоверная политика payload/source через `src/core/**`
 
-Compat-enhanced contract:
+Контракт интерфейса и совместимости:
 
-- `provider-compat`, `interactive-inline` и `tool-render` включены по умолчанию
-- каждый флаг совместимости поддерживает явный режим opt-out со значением `false`
-- capability-based проверок внутренних стыков среды выполнения
-- проверенная базовая среда выполнения: `pi 0.65.0`
-- неизвестная версия `pi` не блокирует запуск, если проверка возможностей проходит
-- неизвестная версия попадает только в диагностические сообщения, но не в предупреждения для пользователя
-- деградация только feature-level, без искусственных артефактов поиска
+- текущий статус поиска обновляется через публичные hooks
+- итоговые запросы и источники сохраняются после хода через `appendEntry` и `registerEntryRenderer`, вне контекста модели
+- карточка появляется только при наличии наблюдаемых `serverToolUse` / `webSearchResult`; текст ответа не превращается в события поиска
+- `provider-compat` включён по умолчанию; старые `interactive-inline` и `tool-render` требуют явного `true`
+- проверенная среда: `pi 0.85.0`; неизвестная версия допускается при успешной проверке возможностей
+- недоступность необязательной возможности не должна блокировать поиск
 
 Матрица и caveats: [docs/compatibility.md](./docs/compatibility.md)
 
@@ -32,12 +31,9 @@ Compat-enhanced contract:
 - `src/core/**` - stable core-first pipeline на публичных hooks
 - `src/compat/**` - compat framework для private runtime seams
 
-`index.js` делает ровно две вещи:
+`index.js` запускает compat bootstrap один раз и передаёт его promise в основной lifecycle. Асинхронная фабрика дожидается регистрации провайдера до старта сессии. Затем подключает публичный renderer, если старый inline-патч не был явно включён и успешно применён.
 
-- один раз запускает `bootstrapCompatRuntime(pi)`
-- передаёт promise с compat summary в `core` lifecycle
-
-Это закрывает сценарий старта без `model_select`: backend path продолжает работать, а compat overlays активируются ранним bootstrap без повторной инициализации.
+Карточка сохраняется на `turn_end`, после сообщения ассистента. Она восстанавливается из истории и поддерживает раскрытие. Вставка поисковых блоков между текстовыми фрагментами ответа больше не является поведением по умолчанию.
 
 Подробности:
 
@@ -55,13 +51,14 @@ Compat-enhanced contract:
 - выставляет `tool_choice = "auto"` и `parallel_tool_calls = true`, если поле не задано
 - обновляет factual search status только по реально наблюдаемым search events
 - строит citations только из реальных source seams
+- сохраняет итоговую карточку поиска, не изменяя сообщение ассистента и контекст модели
 
 ## Что делает compat framework
 
 - определяет runtime descriptor и версию standalone `pi`
 - пробует compat-фичи по capability registry
-- отдельно активирует provider compat, inline patch и tool-render patch
-- отдаёт feature-level warnings только для реально недоступных compat-фич
+- активирует provider compat; UI-патчи проверяет и применяет только при явном opt-in
+- предупреждает о недоступности включённых compat-возможностей
 - не шумит user-facing warning'ами о неизвестной версии `pi`
 
 ## Быстрый запуск
@@ -76,7 +73,7 @@ pi --extension ~/hobby/pi-openai-search
 PI_OPENAI_NATIVE_SEARCH=1 \
 PI_OPENAI_NATIVE_SEARCH_MODE=live \
 CLIPROXYAPI_API_KEY="$OPENAI_API_KEY" \
-  pi --extension "$PWD/index.js" --mode text --print --no-session \
+  pi --extension "$PWD/index.js" --print --no-session \
   --model cliproxyapi/gpt-5.6-sol \
   'Найди свежие заметки про OpenAI Responses API web_search и кратко перескажи с источниками.'
 ```
@@ -96,11 +93,11 @@ Stable env:
 - `PI_OPENAI_NATIVE_SEARCH_DEBUG_FILE=/tmp/pi-openai-search.json`
 - `PI_OPENAI_NATIVE_SEARCH_DEBUG_MESSAGE_FILE=/tmp/pi-openai-search-message.json`
 
-Compat env (все включены по умолчанию; `false` отключает отдельную возможность):
+Compat env:
 
-- `PI_OPENAI_NATIVE_SEARCH_PROVIDER_COMPAT=true|false`
-- `PI_OPENAI_NATIVE_SEARCH_INTERACTIVE_COMPAT=true|false`
-- `PI_OPENAI_NATIVE_SEARCH_TOOL_RENDER_COMPAT=true|false`
+- `PI_OPENAI_NATIVE_SEARCH_PROVIDER_COMPAT=true|false` — по умолчанию `true`
+- `PI_OPENAI_NATIVE_SEARCH_INTERACTIVE_COMPAT=true|false` — старый inline-патч, по умолчанию `false`
+- `PI_OPENAI_NATIVE_SEARCH_TOOL_RENDER_COMPAT=true|false` — старый formatter, по умолчанию `false`
 - `PI_BIN_PATH=/abs/path/to/pi`
 - `PI_AGENT_DIR=/abs/path/to/.pi/agent`
 
@@ -117,6 +114,10 @@ npm test
 ```bash
 npm run test:compat-smoke
 ```
+
+`tests/proof/public-ui.test.mjs` запускает установленный CLI с локальным тестовым провайдером без сетевых запросов: проверяет порядок записей, отсутствие карточек без поиска, исключение из контекста модели и ширину рендера. Это не проверка живого OpenAI/CLIProxyAPI.
+
+На проверенном Pi `0.85.0` встроенные Codex-потоки не выдают `serverToolUse` / `webSearchResult`. Инъекция поиска для них сохраняется, но карточка не создаётся из текста ответа. Текущий provider compat собирает структурированные события для `openai/openai-responses`.
 
 Контуры:
 

@@ -275,7 +275,7 @@ test("probePiCompatCapabilities returns supported summary for available features
   const tempDir = fs.mkdtempSync(path.join(process.cwd(), ".tmp-pi-runtime-"));
   try {
     writeRuntimePackage(tempDir);
-    await withRuntimeEnv({ PI_RUNTIME_ROOT: tempDir }, async () => {
+    await withRuntimeEnv({ PI_RUNTIME_ROOT: tempDir, PI_OPENAI_NATIVE_SEARCH_INTERACTIVE_COMPAT: "true", PI_OPENAI_NATIVE_SEARCH_TOOL_RENDER_COMPAT: "true" }, async () => {
       const summary = await probePiCompatCapabilities(
         { registerProvider() {} },
         {
@@ -317,7 +317,7 @@ test("probePiCompatCapabilities keeps partial compat as first-class result", asy
   const tempDir = fs.mkdtempSync(path.join(process.cwd(), ".tmp-pi-runtime-"));
   try {
     writeRuntimePackage(tempDir);
-    await withRuntimeEnv({ PI_RUNTIME_ROOT: tempDir }, async () => {
+    await withRuntimeEnv({ PI_RUNTIME_ROOT: tempDir, PI_OPENAI_NATIVE_SEARCH_INTERACTIVE_COMPAT: "true" }, async () => {
       const summary = await probePiCompatCapabilities(
         { registerProvider() {} },
         {
@@ -386,4 +386,24 @@ test("probePiCompatCapabilities preserves explicit opt-out when runtime resoluti
       assert.match(feature.reason, /disabled by env/);
     }
   });
+});
+
+test("default bootstrap never probes private UI targets", async () => {
+  const tempDir = fs.mkdtempSync(path.join(process.cwd(), ".tmp-pi-runtime-"));
+  try {
+    writeRuntimePackage(tempDir);
+    await withRuntimeEnv({ PI_RUNTIME_ROOT: tempDir }, async () => {
+      const summary = await probePiCompatCapabilities({}, {
+        probeProviderCompat: async () => ({ feature: COMPAT_FEATURES.providerCompat, enabled: true, supported: true }),
+        probeInteractiveInlineCompat: () => assert.fail("must not import InteractiveMode"),
+        probeToolRenderCompat: () => assert.fail("must not patch ToolExecutionComponent"),
+      });
+      assert.equal(summary.status, "supported");
+      assert.deepEqual(summary.warnings, []);
+      assert.equal(summary.features[COMPAT_FEATURES.interactiveInline].enabled, false);
+      assert.equal(summary.features[COMPAT_FEATURES.toolRender].enabled, false);
+    });
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
 });

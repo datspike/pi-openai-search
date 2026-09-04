@@ -1,5 +1,7 @@
+import { Text } from "@earendil-works/pi-tui";
 import { registerCoreOpenAISearchExtension } from "./src/core/extension/register-openai-search-extension.js";
 import { bootstrapCompatRuntime } from "./src/compat/bootstrap.js";
+import { registerNativeSearchEntries } from "./src/core/extension/search-entries.js";
 
 /**
  * Core-first extension для native OpenAI web_search.
@@ -9,10 +11,20 @@ import { bootstrapCompatRuntime } from "./src/compat/bootstrap.js";
  *
  * @param {any} pi Экземпляр pi runtime.
  */
-export default function registerOpenAISearchExtension(pi) {
-  const compatRuntimePromise = bootstrapCompatRuntime(pi);
+export default async function registerOpenAISearchExtension(pi) {
+  const compatRuntimePromise = bootstrapCompatRuntime(pi).catch((error) => ({
+    warnings: [`Native search compat недоступен: ${error instanceof Error ? error.message : String(error)}`],
+    activation: { appliedFeatures: [] },
+  }));
 
   registerCoreOpenAISearchExtension(pi, {
     getCompatRuntime: () => compatRuntimePromise,
   });
+
+  const compat = await compatRuntimePromise;
+  // Публичные записи заменяют UI-патчи, но не дублируют явно включённый inline-режим.
+  if (!compat.activation.appliedFeatures.includes("interactive-inline")
+      && typeof pi.registerEntryRenderer === "function" && typeof pi.appendEntry === "function") {
+    registerNativeSearchEntries(pi, Text);
+  }
 }

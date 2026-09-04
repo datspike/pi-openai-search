@@ -5,7 +5,7 @@ export const SUPPORTED_RUNTIME = Object.freeze({
     Object.freeze({ provider: "openai-codex", api: "openai-codex-responses" }),
     Object.freeze({ provider: "cliproxyapi", api: "cliproxyapi-codex-responses" }),
   ]),
-  testedBaselineVersion: "0.65.0",
+  testedBaselineVersion: "0.85.0",
 });
 
 export const COMPAT_CAPABILITIES = Object.freeze({
@@ -20,8 +20,9 @@ export const COMPAT_CAPABILITIES = Object.freeze({
     "tool-render",
   ]),
   policy: Object.freeze({
-    defaultEnabled: true,
-    optOut: "per-feature-env-false",
+    defaultEnabled: Object.freeze(["provider-compat"]),
+    optIn: Object.freeze(["interactive-inline", "tool-render"]),
+    publicUI: "appendEntry + registerEntryRenderer",
     unknownVersion: "allowed-if-probe-passes",
     degradation: "feature-level-fail-open",
   }),
@@ -43,11 +44,13 @@ export const ARCHITECTURE_LAYERS = Object.freeze({
       "before_provider_request",
       "message_update",
       "message_end",
+      "turn_end",
     ]),
     outputs: Object.freeze([
       "payload mutation",
       "truthful source set",
       "status state",
+      "TUI-only search entries",
     ]),
   },
   compat: {
