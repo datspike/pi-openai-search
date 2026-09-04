@@ -138,6 +138,10 @@ export default function(pi) {
         for search in displayed:
             assert search["label"] in plain(), "Persisted card was not visible in TUI"
         assert "UI compat" not in plain()
+        rendered_terminal = transcript.decode(errors="replace")
+        marker = "⌕ Web search"
+        marker_index = rendered_terminal.rfind(marker)
+        assert marker_index >= 0 and re.search(r"\x1b\[(?:\d+;)*4\d", rendered_terminal[max(0, marker_index - 80):marker_index]), "Card header has no background style"
         # Повторная загрузка должна восстановить карточку из истории, а не создать ещё одну.
         replay_start = len(transcript)
         os.write(master, b"/reload\r")
@@ -155,6 +159,7 @@ export default function(pi) {
         receipt = {"status": "passed", "model": args.model, "api": "cliproxyapi-codex-responses",
                    "tui_mode": args.tui_mode, "reloaded": True, "negative_cards": 0,
                    "replayed_after_reload": True, "normal_followup": True,
+                   "card_background": True,
                    "cards": len(cards()), "observed_search_ids": sorted(call_ids),
                    "rendered_search_ids": [s["id"] for s in displayed],
                    "sources_visible": any("https://" in s["output"] and "https://" in plain() for s in displayed),

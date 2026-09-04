@@ -12,8 +12,11 @@ const result = { type: "webSearchResult", toolUseId: "ws_1", content: [
   { type: "web_search_result", title: "Observed source", url: "https://example.com/source" },
 ] };
 const message = (content, extra = {}) => ({ role: "assistant", provider: "openai", api: "openai-responses", content, stopReason: "stop", ...extra });
-class Text { constructor(text) { this.text = text; } }
-const theme = { fg: (_color, text) => text };
+class Text { constructor(text) { this.text = text; } render() { return this.text.split("\n"); } }
+class Box { constructor(_x, _y, bg) { this.children = []; this.bg = bg; } addChild(child) { this.children.push(child); } render(width) { return this.children.flatMap((child) => child.render(width)).map(this.bg); } }
+class VStack { constructor(children) { this.children = children; } render(width) { return this.children.flatMap((child) => child.render(width)); } }
+const components = { Box, Text, VStack };
+const theme = { fg: (_color, text) => text, bg: (_color, text) => `[card]${text}[/card]`, bold: (text) => text };
 
 test("public entries contain only observed calls with matching results", () => {
   const input = message([call, { ...result, toolUseId: "unrelated" }, result]);
@@ -48,12 +51,13 @@ test("public entries preserve supported routes, source-less completion and inter
   assert.equal(collectNativeSearchEntries(message([call, { ...result, content: {} }]))[0].label, "Web search: result unavailable");
 });
 
-test("entry renderer supports expansion, persisted data and removes terminal controls", () => {
+test("entry renderer creates separate visual cards, expands details and removes terminal controls", () => {
   const entry = { data: { searches: [{ label: "Searched\x1b[31m test", output: Array.from({ length: 15 }, (_, i) => `source ${i}`).join("\n") }] } };
-  const collapsed = renderNativeSearchEntry(entry, { expanded: false }, theme, Text).text;
-  const expanded = renderNativeSearchEntry(JSON.parse(JSON.stringify(entry)), { expanded: true }, theme, Text).text;
-  assert.match(collapsed, /6 more lines/);
-  assert.doesNotMatch(collapsed, /source 14|\x1b/);
+  const collapsed = renderNativeSearchEntry(entry, { expanded: false }, theme, components).render(100).join("\n");
+  const expanded = renderNativeSearchEntry(JSON.parse(JSON.stringify(entry)), { expanded: true }, theme, components).render(100).join("\n");
+  assert.match(collapsed, /\[card\]⌕ Web search/);
+  assert.match(collapsed, /Searched test/);
+  assert.doesNotMatch(collapsed, /source 0|\x1b/);
   assert.match(expanded, /source 14/);
   assert.doesNotMatch(expanded, /\x1b/);
 });
@@ -66,7 +70,7 @@ test("turn_end appends one TUI-only entry per message and keeps negative path em
     registerEntryRenderer: (type, renderer) => { assert.equal(type, NATIVE_SEARCH_ENTRY_TYPE); assert.equal(typeof renderer, "function"); },
     appendEntry: (customType, data) => entries.push({ customType, data }),
   };
-  registerNativeSearchEntries(pi, Text);
+  registerNativeSearchEntries(pi, components);
   assert.deepEqual([...handlers.keys()], ["turn_end"]);
   handlers.get("turn_end")({ message: message([call, result]) });
   assert.equal(entries.length, 1);

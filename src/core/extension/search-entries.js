@@ -26,28 +26,28 @@ export function collectNativeSearchEntries(message) {
   return [...searches.values()];
 }
 
-/** Рендерит сохранённые данные, не перечитывая текущую сессию и не меняя контекст модели. */
-export function renderNativeSearchEntry(entry, { expanded }, theme, Text) {
+/** Рендерит отдельные карточки поиска, не перечитывая сессию и не меняя контекст модели. */
+export function renderNativeSearchEntry(entry, { expanded }, theme, { Box, Text, VStack }) {
   const searches = Array.isArray(entry.data?.searches) ? entry.data.searches : [];
   const clean = (value) => stripVTControlCharacters(String(value ?? "")).replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "");
-  const lines = [];
+  const cards = [];
   for (const search of searches) {
-    lines.push(theme.fg(search.isError ? "error" : "toolTitle", clean(search.label)));
+    const card = new Box(1, 0, (text) => theme.bg("customMessageBg", text));
+    const title = theme.bold(theme.fg(search.isError ? "error" : "customMessageLabel", "⌕ Web search"));
+    const label = theme.fg("customMessageText", clean(search.label));
     const output = clean(search.output);
-    if (output) lines.push(output);
+    const details = expanded && output ? `\n${theme.fg("toolOutput", output)}` : "";
+    card.addChild(new Text(`${title}\n${label}${details}`));
+    cards.push(card);
   }
-  const allLines = lines.join("\n").split("\n");
-  const shown = expanded ? allLines : allLines.slice(0, 10);
-  if (shown.length < allLines.length) {
-    shown.push(theme.fg("muted", `… ${allLines.length - shown.length} more lines`));
-  }
-  return new Text(shown.join("\n"), 0, 0);
+  if (cards.length === 0) return new Text("");
+  return new VStack(cards, { gap: 1 });
 }
 
 /** Сохраняет итог поиска после хода; Pi отвечает за историю, перенос строк и раскрытие. */
-export function registerNativeSearchEntries(pi, Text) {
+export function registerNativeSearchEntries(pi, components) {
   pi.registerEntryRenderer(NATIVE_SEARCH_ENTRY_TYPE,
-    (entry, options, theme) => renderNativeSearchEntry(entry, options, theme, Text));
+    (entry, options, theme) => renderNativeSearchEntry(entry, options, theme, components));
 
   pi.on("turn_end", (event) => {
     const config = loadNativeSearchConfig();

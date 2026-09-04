@@ -1,4 +1,4 @@
-import { Text } from "@earendil-works/pi-tui";
+import { Box, Text, VStack } from "@earendil-works/pi-tui";
 import { registerCoreOpenAISearchExtension } from "./src/core/extension/register-openai-search-extension.js";
 import { bootstrapCompatRuntime } from "./src/compat/bootstrap.js";
 import { registerNativeSearchEntries } from "./src/core/extension/search-entries.js";
@@ -27,6 +27,6 @@ export default async function registerOpenAISearchExtension(pi) {
   // Публичные записи заменяют UI-патчи, но не дублируют явно включённый inline-режим.
   if (!compat.activation.appliedFeatures.includes("interactive-inline")
       && typeof pi.registerEntryRenderer === "function" && typeof pi.appendEntry === "function") {
-    registerNativeSearchEntries(pi, Text);
+    registerNativeSearchEntries(pi, { Box, Text, VStack });
   }
 }

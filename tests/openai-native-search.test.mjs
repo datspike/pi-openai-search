@@ -177,7 +177,7 @@ async function loadTestableExtensionModule(
 
   const transformedSource = fs
     .readFileSync(sourcePath, "utf8")
-    .replace('"@earendil-works/pi-tui"', '"data:text/javascript,export class Text {}"')
+    .replace('"@earendil-works/pi-tui"', '"data:text/javascript,export class Box { addChild() {} };export class Text {};export class VStack {}"')
     .replace(
       '"./src/core/extension/register-openai-search-extension.js"',
       JSON.stringify(pathToFileURL(transformedCoreExtensionPath).href),

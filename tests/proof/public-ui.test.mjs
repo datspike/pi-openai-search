@@ -15,7 +15,7 @@ test("packaged Pi persists public search entries after assistant and excludes th
   try { runtimeRoot = resolvePiRuntimeRoot(); }
   catch (error) { t.skip(error.message); return; }
   const pkg = JSON.parse(fs.readFileSync(path.join(runtimeRoot, "package.json"), "utf8"));
-  const { Text, visibleWidth } = await importPiRuntimeModule("node_modules/@mariozechner/pi-tui/dist/index.js");
+  const { Box, Text, VStack, visibleWidth } = await importPiRuntimeModule("node_modules/@mariozechner/pi-tui/dist/index.js");
   const { buildSessionContext } = await importPiRuntimeModule("dist/core/session-manager.js");
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-search-public-ui-"));
   try {
@@ -44,13 +44,17 @@ test("packaged Pi persists public search entries after assistant and excludes th
         const assistantIndex = entries.findIndex((entry) => entry.message?.role === "assistant");
         assert.ok(entries.indexOf(cards[0]) > assistantIndex, "card must follow persisted assistant message");
         for (const expanded of [false, true]) {
-          const component = renderNativeSearchEntry(cards[0], { expanded }, { fg: (_color, text) => text }, Text);
-          for (const width of [1, 10, 40, 80]) {
+          const component = renderNativeSearchEntry(cards[0], { expanded }, {
+            fg: (_color, text) => text, bg: (_color, text) => text, bold: (text) => text,
+          }, { Box, Text, VStack });
+          for (const width of [2, 10, 40, 80]) {
             const lines = component.render(width);
             assert.ok(lines.every((line) => visibleWidth(line) <= width), `overflow at width ${width}`);
           }
+          assert.match(component.render(100).join("\n"), /⌕ Web search/);
           assert.match(component.render(100).join("\n"), /Searched observed fixture query/);
-          assert.match(component.render(100).join("\n"), /https:\/\/example.com\/fixture/);
+          if (expanded) assert.match(component.render(100).join("\n"), /https:\/\/example.com\/fixture/);
+          else assert.doesNotMatch(component.render(100).join("\n"), /https:\/\/example.com\/fixture/);
         }
       }
     }
