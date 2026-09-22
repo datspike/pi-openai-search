@@ -71,6 +71,7 @@ async function loadTestableExtensionModule(
   const searchDisplayPath = fileURLToPath(new URL("../src/core/lifecycle/search-status.js", import.meta.url));
   const compatPath = fileURLToPath(new URL("../src/compat/runtime/pi-runtime.js", import.meta.url));
   const compatCapabilitiesPath = fileURLToPath(new URL("../src/compat/runtime/pi-compat-capabilities.js", import.meta.url));
+  const providerContextPath = fileURLToPath(new URL("../src/compat/provider/provider-context.js", import.meta.url));
   const mockCompatRuntimePath = path.join(tempDir, "pi-runtime-mock.js");
   const mockFsPromisesPath = path.join(tempDir, "fs-promises-mock.js");
   const mockNativeSearchPath = path.join(tempDir, "openai-native-search-mock.js");
@@ -184,6 +185,7 @@ async function loadTestableExtensionModule(
     )
     .replace('"./src/compat/bootstrap.js"', JSON.stringify(pathToFileURL(transformedCompatBootstrapPath).href))
     .replace('"./src/compat/provider/cliproxy-search-events.js"', JSON.stringify(new URL("../src/compat/provider/cliproxy-search-events.js", import.meta.url).href))
+    .replace('"./src/compat/provider/provider-context.js"', JSON.stringify(pathToFileURL(providerContextPath).href))
     .replace('"./src/core/extension/search-entries.js"', JSON.stringify(new URL("../src/core/extension/search-entries.js", import.meta.url).href));
 
   fs.writeFileSync(transformedModulePath, transformedSource, "utf8");
