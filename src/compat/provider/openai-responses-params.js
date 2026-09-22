@@ -1,5 +1,5 @@
 import { appendUniqueIncludeField } from "../../core/payload/native-search.js";
-import { supportsXhigh } from "../runtime/pi-ai-compat.js";
+import { resolveTranscriptTools, supportsXhigh } from "../runtime/pi-ai-compat.js";
 
 const OPENAI_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex", "opencode"]);
 
@@ -102,8 +102,15 @@ export function buildPatchedParams(model, context, options, internals) {
     params.service_tier = options.serviceTier;
   }
 
-  if (context.tools) {
-    params.tools = internals.convertResponsesTools(context.tools);
+  // Pi 0.86 stores the currently requested tools in system-message snapshots,
+  // not in the legacy context.tools field. Keep the latter as a fallback for
+  // older runtimes where resolveTranscriptTools is unavailable.
+  const transcriptTools = resolveTranscriptTools?.(context?.messages || [])?.requestTools;
+  const tools = Array.isArray(transcriptTools) && transcriptTools.length > 0
+    ? transcriptTools
+    : context?.tools;
+  if (Array.isArray(tools) && tools.length > 0) {
+    params.tools = internals.convertResponsesTools(tools);
   }
 
   const requestedReasoningEffort = options?.reasoningEffort;

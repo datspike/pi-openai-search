@@ -44,3 +44,8 @@ export const supportsXhigh =
   typeof piAiModule.supportsXhigh === "function"
     ? piAiModule.supportsXhigh
     : (() => false);
+
+export const resolveTranscriptTools =
+  typeof piAiModule.resolveTranscriptTools === "function"
+    ? piAiModule.resolveTranscriptTools
+    : undefined;
