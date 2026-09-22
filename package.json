@@ -7,8 +7,9 @@
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "https://github.com/spike/pi-openai-search.git"
+    "url": "git+https://github.com/datspike/pi-openai-search.git"
   },
+  "author": "datspike",
   "keywords": [
     "pi",
     "extension",
