@@ -13,6 +13,12 @@ Stable contract:
 - Azure, произвольные OpenAI-compatible поставщики и данные без метаданных модели не изменяются
 - достоверная политика payload/source через `src/core/**`
 
+| Provider/API | Роль в локальном Pi |
+|---|---|
+| `cliproxyapi` / `cliproxyapi-codex-responses` | Основной WebSocket route с Fast Mode |
+| `openai` / `openai-responses` | HTTP fallback через CLIProxyAPI |
+| `openai-codex` / `openai-codex-responses` | Прямой ChatGPT OAuth fallback |
+
 Контракт интерфейса и совместимости:
 
 - текущий статус поиска обновляется через публичные hooks
