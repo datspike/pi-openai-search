@@ -1049,7 +1049,7 @@ test("interactive search-order patch formats web search result without runtime h
     const toolComponent = assistantComponent.contentContainer.children.find((child) => child.kind === "tool");
 
     assert.deepEqual(toolComponent.result, {
-      content: [{ type: "text", text: "Search complete" }],
+      content: [{ type: "text", text: "No structured search sources available" }],
       isError: false,
     });
   } finally {
@@ -1210,7 +1210,7 @@ test("formatWebSearchResult formats sources and completion sentinel", () => {
   );
   assert.equal(
     formatWebSearchResult({ type: "web_search_tool_result_complete" }),
-    "Search complete",
+    "No structured search sources available",
   );
 });
 
@@ -1610,6 +1610,45 @@ test("extension does not reuse selected model when provider request omits metada
     assert.equal(nextPayload.seenModelApi, undefined);
     assert.equal(nextPayload.seenProvider, undefined);
     assert.equal(nextPayload.seenModelId, undefined);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("direct Codex request uses the selected model only for matching Codex payloads", async () => {
+  const tempDir = fs.mkdtempSync(path.join(process.cwd(), ".tmp-pi-openai-search-codex-context-test-"));
+  try {
+    const extensionModule = await loadTestableExtensionModule(tempDir, {
+      fsPromisesLines: [
+        'export async function mkdir() {}',
+        'export async function writeFile() {}',
+      ],
+      nativeSearchLines: [
+        'export function injectNativeWebSearch(payload, model) {',
+        '  return { ...payload, seenModelApi: model?.api, seenProvider: model?.provider, seenModelId: model?.id };',
+        '}',
+        'export function isOpenAIResponsesModel(model) { return model?.provider === "openai-codex" && model?.api === "openai-codex-responses"; }',
+        'export function loadNativeSearchConfig() { return { enabled: true, mode: "live" }; }',
+      ],
+    });
+    const handlers = new Map();
+    extensionModule.default({ on(name, handler) { handlers.set(name, handler); }, registerProvider() {} });
+    const beforeRequest = handlers.get("before_provider_request");
+    const selected = { provider: "openai-codex", api: "openai-codex-responses", id: "gpt-6-sol" };
+    const payload = { model: "gpt-6-sol", instructions: "test instructions", input: [], tools: [] };
+    assert.deepEqual(beforeRequest({ payload }, { model: selected }), {
+      ...payload, seenModelApi: selected.api, seenProvider: selected.provider, seenModelId: selected.id,
+    });
+    for (const unsafePayload of [
+      { ...payload, model: "gpt-6-luna" },
+      { ...payload, instructions: undefined },
+      { tools: [], instructions: "test instructions" },
+    ]) {
+      const actual = beforeRequest({ payload: unsafePayload }, { model: selected });
+      assert.equal(actual.seenProvider, undefined);
+    }
+    assert.equal(beforeRequest({ payload }, { model: { ...selected, provider: "openai" } }).seenProvider, undefined);
+    assert.equal(beforeRequest({ payload }, { model: { ...selected, api: "openai-responses" } }).seenProvider, undefined);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }

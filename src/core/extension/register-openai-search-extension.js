@@ -14,6 +14,17 @@ function getPayloadModelContext(payload) {
   return contexts instanceof WeakMap ? contexts.get(payload) : undefined;
 }
 
+/** Resolve a direct Codex request only when its model and payload shape match the selected route. */
+function getDirectCodexRequestModel(payload, ctx) {
+  const model = ctx?.model;
+  if (model?.provider !== "openai-codex" || model.api !== "openai-codex-responses"
+      || typeof model.id !== "string" || payload?.model !== model.id
+      || typeof payload.instructions !== "string" || !Array.isArray(payload.input)) {
+    return undefined;
+  }
+  return model;
+}
+
 /**
  * Получение последнего активного factual search.
  *
@@ -89,14 +100,14 @@ export function registerCoreOpenAISearchExtension(pi, options = {}) {
     }
   });
 
-  pi.on("before_provider_request", (event) => {
+  pi.on("before_provider_request", (event, ctx) => {
     const payload = event?.payload;
     if (!payload || typeof payload !== "object") {
       return;
     }
 
     const config = loadNativeSearchConfig();
-    const model = event?.model ?? getPayloadModelContext(payload);
+    const model = event?.model ?? getPayloadModelContext(payload) ?? getDirectCodexRequestModel(payload, ctx);
     const nextPayload = injectNativeWebSearch(payload, model, config);
 
     const debugPath = process.env.PI_OPENAI_NATIVE_SEARCH_DEBUG_FILE;
