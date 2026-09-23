@@ -1,19 +1,29 @@
-/** Keep a bounded factual trace of completed searches without passing display blocks to Pi's estimator. */
+/** Keep a bounded factual trace without passing display blocks to Pi's estimator. */
 export function sanitizeSearchProviderMessages(messages) {
   let changed = false;
   const sanitized = messages.map((message) => {
     if (message?.role !== "assistant" || !Array.isArray(message.content)) return message;
-    const completed = new Set(message.content.filter((block) =>
-      block?.type === "webSearchResult" && block.content?.type === "web_search_tool_result_complete",
-    ).map((block) => block.toolUseId));
+    const resultsById = new Map(message.content.filter((block) =>
+      block?.type === "webSearchResult" && typeof block.toolUseId === "string",
+    ).map((block) => [block.toolUseId, block.content]));
     const content = message.content.flatMap((block) => {
       if (block?.type === "serverToolUse" && block.name === "web_search") {
         changed = true;
-        if (!completed.has(block.id)) return [];
+        if (!resultsById.has(block.id)) return [];
+        const result = resultsById.get(block.id);
+        if (result?.type === "web_search_tool_result_error") {
+          return [{ type: "text", text: "Web search call failed." }];
+        }
+        const sourceCount = Array.isArray(result)
+          ? result.filter((item) => item?.type === "web_search_result" && item.url).length
+          : 0;
+        if (sourceCount > 0) {
+          return [{ type: "text", text: `Web search returned ${sourceCount} structured source${sourceCount === 1 ? "" : "s"}.` }];
+        }
         const url = block.input?.url;
         return [{ type: "text", text: typeof url === "string" && /^https?:\/\//.test(url)
-          ? `Web search opened ${url.slice(0, 2048)} successfully.`
-          : "Web search completed successfully." }];
+          ? `Web search open request for ${url.slice(0, 2048)} finished; no per-call sources available.`
+          : "Web search call finished; no per-call sources available." }];
       }
       if (block?.type === "webSearchResult") { changed = true; return []; }
       return [block];

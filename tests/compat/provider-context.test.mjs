@@ -22,21 +22,33 @@ function legacyEstimate(messages) {
   }, 0), 0);
 }
 
-test("completed search leaves a factual trace while display blocks stay only in transcript", () => {
+test("source-less search leaves a neutral trace while display blocks stay only in transcript", () => {
   const source = [assistant, { role: "user", content: [{ type: "text", text: "Continue." }] }];
   assert.throws(() => legacyEstimate(source), /undefined/);
   const result = sanitizeSearchProviderMessages(source);
   assert.equal(result.changed, true);
-  assert.deepEqual(result.messages[0].content, [text, { type: "text", text: "Web search completed successfully." }, toolCall]);
+  assert.deepEqual(result.messages[0].content, [text, { type: "text", text: "Web search call finished; no per-call sources available." }, toolCall]);
   assert.deepEqual(source[0].content, [text, serverToolUse, searchResult, toolCall]);
   assert.doesNotThrow(() => legacyEstimate(result.messages));
 });
 
-test("only observed successful page opens get a URL trace; failed searches leave none", () => {
+test("page-open trace records the URL without asserting a successful fetch", () => {
   const page = { ...serverToolUse, input: { type: "open_page", url: "https://pi.dev/news/releases/0.87.0" } };
   assert.deepEqual(sanitizeSearchProviderMessages([{ role: "assistant", content: [page, searchResult] }]).messages[0].content,
-    [{ type: "text", text: "Web search opened https://pi.dev/news/releases/0.87.0 successfully." }]);
+    [{ type: "text", text: "Web search open request for https://pi.dev/news/releases/0.87.0 finished; no per-call sources available." }]);
   assert.deepEqual(sanitizeSearchProviderMessages([{ role: "assistant", content: [page] }]).messages[0].content, []);
+});
+
+test("failed and sourced calls retain separate factual traces", () => {
+  const failedCall = { ...serverToolUse, id: "ws-failed" };
+  const sourcedCall = { ...serverToolUse, id: "ws-sourced" };
+  const failedResult = { type: "webSearchResult", toolUseId: "ws-failed", content: { type: "web_search_tool_result_error", message: "Provider search failed" } };
+  const sourcedResult = { type: "webSearchResult", toolUseId: "ws-sourced", content: [{ type: "web_search_result", title: "Pi", url: "https://pi.dev" }] };
+  const actual = sanitizeSearchProviderMessages([{ role: "assistant", content: [failedCall, sourcedCall, failedResult, sourcedResult] }]);
+  assert.deepEqual(actual.messages[0].content, [
+    { type: "text", text: "Web search call failed." },
+    { type: "text", text: "Web search returned 1 structured source." },
+  ]);
 });
 
 test("context handler returns no rewrite when no search display blocks exist", () => {
@@ -50,6 +62,6 @@ test("context handler rewrites both native search projection block types", () =>
   registerSearchProviderContextSanitizer({ on(_name, fn) { handler = fn; } });
   const event = { messages: [assistant] };
   const result = handler(event);
-  assert.deepEqual(result.messages, [{ role: "assistant", content: [text, { type: "text", text: "Web search completed successfully." }, toolCall] }]);
+  assert.deepEqual(result.messages, [{ role: "assistant", content: [text, { type: "text", text: "Web search call finished; no per-call sources available." }, toolCall] }]);
   assert.deepEqual(event.messages, [assistant]);
 });
