@@ -142,7 +142,7 @@ export function formatWebSearchResult(content) {
       return String(content.message || content.error || "Web search failed").trim();
     }
     if (content.type === "web_search_tool_result_complete") {
-      return "Search complete";
+      return "No structured search sources available";
     }
   }
 

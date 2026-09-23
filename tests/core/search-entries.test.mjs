@@ -37,8 +37,8 @@ test("public entries preserve supported routes, source-less completion and inter
     assert.equal(collectNativeSearchEntries(message([call, result], { provider, api })).length, 1);
   }
   const done = collectNativeSearchEntries(message([{ ...call, input: {} }, { ...result, content: { type: "web_search_tool_result_complete" } }]))[0];
-  assert.equal(done.label, "Searched the web");
-  assert.equal(done.output, "Search complete");
+  assert.equal(done.label, "Searched the web (no structured sources)");
+  assert.equal(done.output, "No structured search sources available");
   const failed = collectNativeSearchEntries(message([call, { ...result, content: { type: "web_search_tool_result_error", message: "Rate limited" } }]))[0];
   assert.equal(failed.label, "Web search failed");
   assert.equal(failed.output, "Rate limited");

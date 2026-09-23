@@ -13,10 +13,11 @@ export function collectNativeSearchEntries(message) {
     if (block?.type !== "serverToolUse" || block.name !== "web_search" || !block.id) continue;
     const result = content.find((item) => item?.type === "webSearchResult" && item.toolUseId === block.id);
     const failed = result?.content?.type === "web_search_tool_result_error";
-    const completed = Array.isArray(result?.content) || result?.content?.type === "web_search_tool_result_complete";
+    const sourceLess = result?.content?.type === "web_search_tool_result_complete";
+    const completed = Array.isArray(result?.content) || sourceLess;
     searches.set(block.id, {
       id: block.id,
-      label: completed ? formatTruthfulWebSearchDoneLabel(block.input)
+      label: completed ? `${formatTruthfulWebSearchDoneLabel(block.input)}${sourceLess ? " (no structured sources)" : ""}`
         : failed ? "Web search failed"
         : message.stopReason === "aborted" ? "Web search interrupted" : "Web search: result unavailable",
       output: result ? formatWebSearchResult(result.content) : "",

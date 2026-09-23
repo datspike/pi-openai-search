@@ -35,8 +35,8 @@ test("replays observed Terra search without inventing sources, including after r
     const output = message();
     for (const event of fixture.events) h.emit(event, output);
     assert.deepEqual(collectNativeSearchEntries(output), [{
-      id: "ws_live_terra", label: "Searched site:python.org downloads latest stable Python release",
-      output: "Search complete", isError: false,
+      id: "ws_live_terra", label: "Searched site:python.org downloads latest stable Python release (no structured sources)",
+      output: "No structured search sources available", isError: false,
     }]);
     assert.equal(output.content.length, 2);
     h.reload();
@@ -78,10 +78,10 @@ test("concurrent outputs, call IDs and structured sources stay isolated; text is
   h.emit(fixture.events[1], b);
   h.emit(fixture.events[2], a); // Поздний completed без sources не стирает наблюдаемые данные.
   assert.match(collectNativeSearchEntries(a)[0].output, /https:\/\/python.org\/downloads\//);
-  assert.equal(collectNativeSearchEntries(b)[0].output, "Search complete");
+  assert.equal(collectNativeSearchEntries(b)[0].output, "No structured search sources available");
   assert.deepEqual(a.content[0], { type: "text", text: "Unchanged text", textSignature: "sig" });
   h.emit({ ...withSource, item: { ...withSource.item, id: "ws_second", action: { type: "search", query: "second" } } }, a);
-  assert.equal(collectNativeSearchEntries(a)[1].output, "Search complete");
+  assert.equal(collectNativeSearchEntries(a)[1].output, "No structured search sources available");
 });
 
 test("failed and incomplete search are not labelled successful", () => {

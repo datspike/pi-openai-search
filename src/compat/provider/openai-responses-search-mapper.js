@@ -149,6 +149,33 @@ function buildAssistantEventContext(output, contentIndex, compactMode = false, e
   };
 }
 
+/** Проецирует результат конкретного web_search_call без потери ошибки или уже наблюдаемых источников. */
+function upsertSearchResultBlock(output, state, item, sources, stream, compactMode = false) {
+  if (item.status === "in_progress" && sources.length === 0) return;
+
+  const resultSources = resolveWebSearchResultSources(sources, []);
+  const resultContent = item.status === "failed"
+    ? { type: "web_search_tool_result_error", message: item.error?.message || "Web search failed" }
+    : buildWebSearchResultContent(resultSources);
+  const resultBlockIndex = state.searchResultBlockById.get(item.id);
+  if (resultBlockIndex == null) {
+    output.content.push({ type: "webSearchResult", toolUseId: item.id, content: resultContent });
+    const contentIndex = output.content.length - 1;
+    state.searchResultBlockById.set(item.id, contentIndex);
+    stream.push({ type: "web_search_result", ...buildAssistantEventContext(output, contentIndex, compactMode, "web_search_result") });
+    return;
+  }
+
+  const block = output.content[resultBlockIndex];
+  if (block?.type !== "webSearchResult") return;
+  // Поздний ответ без источников не стирает ранее увиденные источники или ошибку.
+  if (item.status !== "failed" && resultSources.length === 0
+      && (Array.isArray(block.content) || block.content?.type === "web_search_tool_result_error")) return;
+  if (JSON.stringify(block.content) === JSON.stringify(resultContent)) return;
+  block.content = resultContent;
+  stream.push({ type: "web_search_result", ...buildAssistantEventContext(output, resultBlockIndex, compactMode, "web_search_result") });
+}
+
 /**
  * Обновление assistant message по полному response.completed.
  *
@@ -173,43 +200,16 @@ export function enrichOutputFromCompletedResponse(output, response, state, strea
       .flatMap((item) => extractAnnotationSources(item)),
   );
   const allSources = dedupeSources(
-    searchCalls.flatMap((item) => searchCallSourcesById.get(item.id) || []),
+    searchCalls.filter((item) => item.status !== "failed").flatMap((item) => searchCallSourcesById.get(item.id) || []),
   );
 
   for (const item of responseOutput) {
     if (item?.type === "web_search_call" && typeof item.id === "string" && item.id.length > 0) {
       upsertSearchToolUseBlock(output, state, item, stream, compactMode);
 
-      const perCallSources = searchCallSourcesById.get(item.id) || [];
-      // A completed response can contain several search calls. Sources observed
-      // for one call must never be reassigned to another call merely because it
-      // happens to be the terminal item; annotations remain a separate textual
-      // citation seam and are not correlated to a search call.
-      const resultSources = resolveWebSearchResultSources(perCallSources, []);
-      const resultContent = buildWebSearchResultContent(resultSources);
-      const resultBlockIndex = state.searchResultBlockById.get(item.id);
-      if (resultBlockIndex == null) {
-        output.content.push({
-          type: "webSearchResult",
-          toolUseId: item.id,
-          content: resultContent,
-        });
-        state.searchResultBlockById.set(item.id, output.content.length - 1);
-        stream.push({
-          type: "web_search_result",
-          ...buildAssistantEventContext(output, output.content.length - 1, compactMode, "web_search_result"),
-        });
-      } else {
-        const existingResultBlock = output.content[resultBlockIndex];
-        if (existingResultBlock?.type === "webSearchResult") {
-          const hasObservedSources = Array.isArray(existingResultBlock.content) && existingResultBlock.content.length > 0;
-          // A late completed payload may omit sources already observed in the
-          // stream. Empty data is not authoritative and must not erase them.
-          if (resultSources.length > 0 || !hasObservedSources) {
-            existingResultBlock.content = resultContent;
-          }
-        }
-      }
+      // Источники и ошибки привязываются к своему call id; annotations остаются
+      // отдельным источником цитат в тексте и не приписываются вызову.
+      upsertSearchResultBlock(output, state, item, searchCallSourcesById.get(item.id) || [], stream, compactMode);
       continue;
     }
 
@@ -493,18 +493,9 @@ export async function processResponsesStreamWithSearchDisplay(
         stream.push({ type: "toolcall_end", ...currentEventContext("toolcall_end"), toolCall });
       } else if (item.type === "web_search_call" && typeof item.id === "string" && item.id.length > 0) {
         upsertSearchToolUseBlock(output, state, item, stream, compactStreamEvents);
-        const resultBlockIndex = state.searchResultBlockById.get(item.id);
-        if (resultBlockIndex == null) {
-          output.content.push({
-            type: "webSearchResult",
-            toolUseId: item.id,
-            content: buildWebSearchResultContent(
-              resolveWebSearchResultSources(extractStructuredSearchCallSources(item.action, item.results), []),
-            ),
-          });
-          state.searchResultBlockById.set(item.id, blockIndex());
-          stream.push({ type: "web_search_result", ...currentEventContext("web_search_result") });
-        }
+        upsertSearchResultBlock(
+          output, state, item, extractStructuredSearchCallSources(item.action, item.results), stream, compactStreamEvents,
+        );
       }
     } else if (event.type === "response.completed") {
       const response = event.response;

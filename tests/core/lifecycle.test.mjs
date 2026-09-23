@@ -117,7 +117,7 @@ test("getFactualSearchLifecycleUpdate ignores malformed and non-factual inputs",
   );
 });
 
-test("formatWebSearchResult formats sources and completion sentinel", () => {
+test("formatWebSearchResult distinguishes sources from source-less completion", () => {
   assert.equal(
     formatWebSearchResult([
       {
@@ -130,6 +130,6 @@ test("formatWebSearchResult formats sources and completion sentinel", () => {
   );
   assert.equal(
     formatWebSearchResult({ type: "web_search_tool_result_complete" }),
-    "Search complete",
+    "No structured search sources available",
   );
 });
