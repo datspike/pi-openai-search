@@ -194,3 +194,31 @@ test("a completed source-less call never claims verified sources or an error", a
     { label: "Searched alpha (no structured sources)", text: "No structured search sources available", isError: false },
   ]);
 });
+
+test("piped JSON toolcall_start includes a compact toolCall at its contentIndex", async () => {
+  const originalIsTTY = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+  Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: false });
+  try {
+    for (const before of [[], [
+      { type: "response.output_item.added", item: { type: "web_search_call", id: "search_1", action: { type: "search", query: "alpha" } } },
+      { type: "response.output_item.done", item: { type: "web_search_call", id: "search_1", action: { type: "search", query: "alpha" }, results: [{ title: "A", url: "https://example.com/a" }] } },
+    ]]) {
+      const output = createOutput();
+      const stream = createStream();
+      await processResponsesStreamWithSearchDisplay([
+        ...before,
+        { type: "response.output_item.added", item: { type: "function_call", id: "fc_1", call_id: "call_1", name: "read", arguments: "" } },
+      ], output, stream, {}, {}, helpers);
+
+      const start = stream.events.find((event) => event.type === "toolcall_start");
+      assert.deepEqual(start.partial.content[start.contentIndex], {
+        type: "toolCall", id: "call_1|fc_1", name: "read", arguments: {},
+      });
+      assert.equal(start.contentIndex, 0);
+      assert.equal(output.content.at(-1).type, "toolCall");
+    }
+  } finally {
+    if (originalIsTTY) Object.defineProperty(process.stdout, "isTTY", originalIsTTY);
+    else delete process.stdout.isTTY;
+  }
+});
