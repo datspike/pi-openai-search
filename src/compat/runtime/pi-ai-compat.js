@@ -1,12 +1,6 @@
 import { importPiRuntimeModule } from "./pi-runtime.js";
 
-let piAiModule = {};
-
-try {
-  piAiModule = await importPiRuntimeModule("node_modules/@mariozechner/pi-ai/dist/index.js");
-} catch {
-  piAiModule = {};
-}
+const piAiModule = await importPiRuntimeModule("node_modules/@mariozechner/pi-ai/dist/index.js").catch(() => ({}));
 
 const FailingAssistantMessageEventStream = class AssistantMessageEventStream {
   /**
