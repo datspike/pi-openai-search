@@ -80,6 +80,11 @@ function compactAssistantEventBlock(block, eventType) {
     return undefined;
   }
 
+  if (eventType === "toolcall_start" && block.type === "toolCall") {
+    // Pi's JSON serializer reads the tool id and name from partial.content[contentIndex].
+    return { type: block.type, id: block.id, name: block.name, arguments: {} };
+  }
+
   if (eventType === "server_tool_use" && block.type === "serverToolUse") {
     const input = block.input && typeof block.input === "object"
       ? {
@@ -133,7 +138,7 @@ function buildAssistantEventContext(output, contentIndex, compactMode = false, e
     };
   }
 
-  const shouldKeepBlock = eventType === "server_tool_use" || eventType === "web_search_result";
+  const shouldKeepBlock = eventType === "toolcall_start" || eventType === "server_tool_use" || eventType === "web_search_result";
   const content = shouldKeepBlock ? compactAssistantEventBlock(output.content[contentIndex], eventType) : undefined;
   return {
     contentIndex: content ? 0 : contentIndex,
@@ -193,11 +198,6 @@ export function enrichOutputFromCompletedResponse(output, response, state, strea
   );
   const searchCallSourcesById = new Map(
     searchCalls.map((item) => [item.id, extractStructuredSearchCallSources(item.action, item.results)]),
-  );
-  const annotationSources = dedupeSources(
-    responseOutput
-      .filter((item) => item?.type === "message")
-      .flatMap((item) => extractAnnotationSources(item)),
   );
   const allSources = dedupeSources(
     searchCalls.filter((item) => item.status !== "failed").flatMap((item) => searchCallSourcesById.get(item.id) || []),
@@ -469,7 +469,7 @@ export async function processResponsesStreamWithSearchDisplay(
         });
         currentBlock = null;
       } else if (item.type === "function_call") {
-        let args = {};
+        let args;
         if (currentBlock?.type === "toolCall" && currentBlock.partialJson) {
           try {
             args = JSON.parse(currentBlock.partialJson);
@@ -532,7 +532,7 @@ export async function processResponsesStreamWithSearchDisplay(
         output.content = output.content.filter((block) => block?.type !== "thinking");
       }
     } else if (event.type === "error") {
-      throw new Error(`Error Code ${event.code}: ${event.message}` || "Unknown error");
+      throw new Error(event.code && event.message ? `Error Code ${event.code}: ${event.message}` : "Unknown error");
     } else if (event.type === "response.failed") {
       throw new Error("Unknown error");
     }
