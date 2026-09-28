@@ -1,7 +1,6 @@
 {
   "name": "pi-openai-search",
   "version": "0.1.0",
-  "private": true,
   "description": "Standalone pi extension that enables native OpenAI Responses web_search with truthful compat-enhanced UX.",
   "license": "MIT",
   "type": "module",
@@ -18,6 +17,7 @@
     "web-search",
     "compat"
   ],
+  "files": ["index.js", "src/", "docs/", "README.md", "LICENSE"],
   "scripts": {
     "test": "npm run test:legacy && npm run test:core && npm run test:compat && npm run test:contracts && npm run test:proof",
     "test:legacy": "node --test tests/*.test.mjs",

@@ -47,7 +47,7 @@ Cannot find package '@earendil-works/pi-server' imported from .../dist/experimen
 - `npm test` — модульные, контрактные проверки и запуск установленного CLI с локальным тестовым провайдером.
 - `npm run test:compat-smoke` — проверка текущих defaults и доступных compat-возможностей.
 - `node --test tests/proof/public-ui.test.mjs` — порядок записей в JSONL, отсутствие карточки без поиска, исключение карточки из контекста модели и рендер на узком терминале.
-- `python3 scripts/verify-cliproxy-search-tui.py --provider-extension /home/spike/hobby/pi-cliproxyapi-provider --output PATH` — обязательная живая проверка на Terra: контрольный ход без поиска, настоящий поиск, совпадение raw ID с карточкой, `/reload`, восстановление карточки и следующий ход без поиска.
+- `python3 scripts/verify-cliproxy-search-tui.py --provider-extension /path/to/pi-cliproxyapi-provider --output PATH` — обязательная живая проверка на Terra: контрольный ход без поиска, настоящий поиск, совпадение raw ID с карточкой, `/reload`, восстановление карточки и следующий ход без поиска.
 
 Локальный тестовый провайдер покрывает регрессии публичного renderer, но не считается доказательством работы CLIProxyAPI. Приёмка этого маршрута требует живого прогона через `cliproxyapi/gpt-5.6-terra` в `regular` и `fullscreen` TUI.
 
